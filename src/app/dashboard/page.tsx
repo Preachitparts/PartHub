@@ -1,8 +1,15 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { collection, getDocs, setDoc, doc, getDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { Input } from "@/components/ui/input";
-import { Search } from "lucide-react";
+import { Search, Loader2 } from "lucide-react";
 import { PartsGrid } from "@/components/dashboard/parts-grid";
 import { SmartFilterForm } from "@/components/dashboard/smart-filter-form";
 import type { Part } from "@/types";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 
 const mockParts: Part[] = [
   { id: "1", name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://placehold.co/600x400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000" },
@@ -14,9 +21,87 @@ const mockParts: Part[] = [
 ];
 
 export default function DashboardPage() {
-  // In a real application, you would fetch parts from Firestore here.
-  const parts = mockParts;
+  const [parts, setParts] = useState<Part[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
+  const { toast } = useToast();
+
+  const seedDatabase = async () => {
+    setSeeding(true);
+    try {
+      const seedingFlagDoc = await getDoc(doc(db, "internal", "seeding_flag"));
+
+      if (seedingFlagDoc.exists()) {
+        toast({
+          title: "Database Already Seeded",
+          description: "The initial part data has already been loaded.",
+        });
+        fetchParts();
+        return;
+      }
+
+      for (const part of mockParts) {
+        await setDoc(doc(db, "parts", part.id), part);
+      }
+
+      await setDoc(doc(db, "internal", "seeding_flag"), { seeded: true });
+      
+      toast({
+        title: "Database Seeded",
+        description: "Successfully loaded initial part data into Firestore.",
+      });
+      fetchParts();
+    } catch (error) {
+      console.error("Error seeding database:", error);
+      toast({
+        variant: "destructive",
+        title: "Seeding Failed",
+        description: "Could not load initial data. See console for details.",
+      });
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const fetchParts = async () => {
+    setLoading(true);
+    try {
+      const partsCollection = collection(db, "parts");
+      const partsSnapshot = await getDocs(partsCollection);
+      if (partsSnapshot.empty) {
+        console.log("No parts found in Firestore. The database may need to be seeded.");
+        setParts([]);
+      } else {
+        const partsList = partsSnapshot.docs.map(
+          (doc) => ({ ...doc.data(), id: doc.id } as Part)
+        );
+        setParts(partsList);
+      }
+    } catch (error) {
+      console.error("Error fetching parts:", error);
+      if ((error as any).code === 'permission-denied') {
+        toast({
+          variant: "destructive",
+          title: "Firestore Permission Denied",
+          description: "Please check your Firestore security rules in the Firebase console.",
+        });
+      } else {
+         toast({
+          variant: "destructive",
+          title: "Error Fetching Data",
+          description: "Could not fetch parts from Firestore. See console for details.",
+        });
+      }
+      setParts([]); // Clear parts on error
+    } finally {
+      setLoading(false);
+    }
+  };
   
+  useEffect(() => {
+    fetchParts();
+  }, []);
+
   return (
     <div className="flex flex-col gap-6">
       <SmartFilterForm />
@@ -29,7 +114,23 @@ export default function DashboardPage() {
         />
       </div>
 
-      <PartsGrid parts={parts} />
+      {loading ? (
+        <div className="flex justify-center items-center h-64">
+          <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        </div>
+      ) : parts.length > 0 ? (
+        <PartsGrid parts={parts} />
+      ) : (
+        <Card className="text-center p-8">
+            <h3 className="text-xl font-semibold mb-2">No Parts Found</h3>
+            <p className="text-muted-foreground mb-4">Your parts catalog is empty. You can seed the database with some sample data.</p>
+            <Button onClick={seedDatabase} disabled={seeding}>
+                {seeding && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {seeding ? 'Seeding...' : 'Seed Database'}
+            </Button>
+            <p className="text-xs text-muted-foreground mt-4">Note: You may need to configure Firestore Security Rules to allow writes.</p>
+        </Card>
+      )}
     </div>
   );
 }

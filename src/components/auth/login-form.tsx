@@ -37,8 +37,8 @@ export function LoginForm() {
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      email: "",
-      password: "",
+      email: "admin@example.com",
+      password: "password",
     },
   });
 
@@ -57,7 +57,7 @@ export function LoginForm() {
         title: "Login Failed",
         description:
           error.code === "auth/invalid-credential"
-            ? "Invalid email or password."
+            ? "Invalid email or password. Please ensure you have created this user in the Firebase Authentication console."
             : "An unexpected error occurred. Please try again.",
       });
     } finally {

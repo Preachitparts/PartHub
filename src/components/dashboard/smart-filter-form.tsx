@@ -1,13 +1,13 @@
 "use client";
 
-import { useFormState, useFormStatus } from "react-dom";
+import { useActionState, useEffect } from "react";
+import { useFormStatus } from "react-dom";
 import { smartFilterAction } from "@/app/actions";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Wand2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useEffect } from "react";
 
 const initialState = {
   message: "",
@@ -24,7 +24,7 @@ function SubmitButton() {
 }
 
 export function SmartFilterForm() {
-  const [state, formAction] = useFormState(smartFilterAction, initialState);
+  const [state, formAction] = useActionState(smartFilterAction, initialState);
   const { toast } = useToast();
 
   useEffect(() => {

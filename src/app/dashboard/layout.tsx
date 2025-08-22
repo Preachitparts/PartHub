@@ -23,6 +23,7 @@ import {
   Package,
   Search,
   Loader2,
+  ShoppingCart,
 } from "lucide-react";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Button } from "@/components/ui/button";
@@ -65,9 +66,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <SidebarContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard" isActive>
+              <SidebarMenuButton href="/dashboard">
                 <LayoutGrid />
                 Dashboard
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton href="/dashboard/pos" isActive>
+                <ShoppingCart />
+                Point of Sale
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>

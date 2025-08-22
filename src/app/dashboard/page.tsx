@@ -9,16 +9,31 @@ import { PartsGrid } from "@/components/dashboard/parts-grid";
 import { SmartFilterForm } from "@/components/dashboard/smart-filter-form";
 import type { Part } from "@/types";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 
-const mockParts: Part[] = [
-  { id: "1", name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://placehold.co/600x400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000" },
-  { id: "2", name: "Engine Air Filter", partNumber: "EAF-002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://placehold.co/600x400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300" },
-  { id: "3", name: "Hydraulic Pump", partNumber: "HYD-PMP-003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://placehold.co/600x400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10" },
-  { id: "4", name: "Brake Pad Set", partNumber: "BRK-PAD-004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://placehold.co/600x400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900" },
-  { id: "5", name: "Turbocharger", partNumber: "TRB-CHR-005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://placehold.co/600x400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5" },
-  { id: "6", name: "Fuel Injector", partNumber: "FUL-INJ-006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://placehold.co/600x400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000" },
+const TAX_RATE = 0.219; // 21.9%
+
+const mockParts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[] = [
+  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://placehold.co/600x400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000", taxable: true },
+  { name: "Engine Air Filter", partNumber: "EAF-002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://placehold.co/600x400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300", taxable: true },
+  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://placehold.co/600x400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10", taxable: true },
+  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://placehold.co/600x400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900", taxable: true },
+  { name: "Turbocharger", partNumber: "TRB-CHR-005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://placehold.co/600x400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5", taxable: false },
+  { name: "Fuel Injector", partNumber: "FUL-INJ-006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://placehold.co/600x400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000", taxable: true },
 ];
+
+const generatePartsWithTax = (parts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[]): Omit<Part, 'id'>[] => {
+  return parts.map((part, index) => {
+    const tax = part.taxable ? part.price * TAX_RATE : 0;
+    const exFactPrice = part.price + tax;
+    return {
+      ...part,
+      tax,
+      exFactPrice,
+    };
+  });
+};
 
 export default function DashboardPage() {
   const [parts, setParts] = useState<Part[]>([]);
@@ -39,12 +54,16 @@ export default function DashboardPage() {
         fetchParts();
         return;
       }
+      
+      const partsToSeed = generatePartsWithTax(mockParts);
 
-      for (const part of mockParts) {
-        await setDoc(doc(db, "parts", part.id), part);
+      for (let i = 0; i < partsToSeed.length; i++) {
+        const part = partsToSeed[i];
+        const partId = (i + 1).toString();
+        await setDoc(doc(db, "parts", partId), part);
       }
 
-      await setDoc(doc(db, "internal", "seeding_flag"), { seeded: true });
+      await setDoc(doc(db, "internal", "seeding_flag"), { seeded: true, taxRate: TAX_RATE });
       
       toast({
         title: "Database Seeded",

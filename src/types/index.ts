@@ -3,7 +3,10 @@ export interface Part {
   name: string;
   partNumber: string;
   description: string;
-  price: number;
+  price: number; // This will be treated as the base price
+  tax: number;
+  exFactPrice: number;
+  taxable: boolean;
   stock: number;
   imageUrl: string;
   brand: string;

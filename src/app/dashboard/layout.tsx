@@ -28,10 +28,13 @@ import {
 } from "lucide-react";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -67,28 +70,36 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <SidebarContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard" >
-                <LayoutGrid />
-                Dashboard
-              </SidebarMenuButton>
+              <Button asChild variant="ghost" className="w-full justify-start gap-2" >
+                <Link href="/dashboard">
+                  <LayoutGrid />
+                  Dashboard
+                </Link>
+              </Button>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard/pos">
-                <ShoppingCart />
-                Point of Sale
-              </SidebarMenuButton>
+              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+                <Link href="/dashboard/pos">
+                  <ShoppingCart />
+                  Point of Sale
+                </Link>
+              </Button>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard/inventory">
-                <Wrench />
-                Inventory
-              </SidebarMenuButton>
+              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+                <Link href="/dashboard/inventory">
+                  <Wrench />
+                  Inventory
+                </Link>
+              </Button>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard/settings">
-                <Settings />
-                Settings
-              </SidebarMenuButton>
+              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+                <Link href="/dashboard/settings">
+                  <Settings />
+                  Settings
+                </Link>
+              </Button>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarContent>

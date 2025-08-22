@@ -24,6 +24,7 @@ import {
   Search,
   Loader2,
   ShoppingCart,
+  Settings,
 } from "lucide-react";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Button } from "@/components/ui/button";
@@ -66,33 +67,27 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <SidebarContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard">
+              <SidebarMenuButton href="/dashboard" >
                 <LayoutGrid />
                 Dashboard
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton href="/dashboard/pos" isActive>
+              <SidebarMenuButton href="/dashboard/pos">
                 <ShoppingCart />
                 Point of Sale
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton>
+              <SidebarMenuButton href="/dashboard/inventory">
                 <Wrench />
-                By Type
+                Inventory
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton>
-                <Building2 />
-                By Brand
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton>
-                <Car />
-                By Equipment
+              <SidebarMenuButton href="/dashboard/settings">
+                <Settings />
+                Settings
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

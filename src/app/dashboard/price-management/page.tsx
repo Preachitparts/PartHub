@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, doc, getDoc, getDocs, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, writeBatch, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, Save } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Part } from "@/types";
+import { logActivity } from "@/lib/activity-log";
 
 interface EditablePart extends Part {
   newPrice?: number;
@@ -41,10 +42,10 @@ export default function PriceManagementPage() {
     setLoading(true);
     try {
       // Fetch tax rate
-      const taxDocRef = doc(db, "settings", "tax");
+      const taxDocRef = doc(db, "internal", "seeding_flag");
       const taxDoc = await getDoc(taxDocRef);
-      if (taxDoc.exists()) {
-        setTaxRate(taxDoc.data().rate);
+      if (taxDoc.exists() && taxDoc.data().taxRate) {
+        setTaxRate(taxDoc.data().taxRate);
       }
 
       // Fetch parts
@@ -82,41 +83,47 @@ export default function PriceManagementPage() {
   const handleSaveChanges = async () => {
     setIsSaving(true);
     try {
-      const batch = writeBatch(db);
+        const batch = writeBatch(db);
+        const partsToUpdate = parts.filter(p => p.newPrice !== undefined && p.newPrice !== p.price);
+        let updatedPricesCount = 0;
 
-      // Save the new tax rate
-      const taxDocRef = doc(db, "settings", "tax");
-      batch.set(taxDocRef, { rate: taxRate });
+        // Save the new tax rate and recalculate all part taxes
+        const taxDocRef = doc(db, "internal", "seeding_flag");
+        await updateDoc(taxDocRef, { taxRate: taxRate });
+        await logActivity(`Updated global tax rate to ${taxRate * 100}%.`);
 
-      const partsToUpdate = parts.filter(p => p.newPrice !== undefined && p.newPrice !== p.price);
+        const allParts = await getDocs(collection(db, "parts"));
+        allParts.forEach(docSnap => {
+            const part = docSnap.data() as Part;
+            const partRef = doc(db, "parts", docSnap.id);
+            let currentPrice = part.price;
+            
+            // Check if this part has a pending price update
+            const pendingUpdate = partsToUpdate.find(p => p.id === docSnap.id);
+            if (pendingUpdate && pendingUpdate.newPrice !== undefined) {
+                currentPrice = pendingUpdate.newPrice;
+                batch.update(partRef, {
+                    price: currentPrice,
+                    previousPrice: part.price,
+                });
+                updatedPricesCount++;
+                logActivity(`Updated price for ${part.name} from GH₵${part.price.toFixed(2)} to GH₵${currentPrice.toFixed(2)}.`);
+            }
 
-      if (partsToUpdate.length === 0) {
-        toast({ title: "No Changes", description: "Tax rate saved. No price changes to update." });
-        await batch.commit();
-        return;
-      }
-      
-      partsToUpdate.forEach((part) => {
-        if (part.newPrice !== undefined) {
-          const partRef = doc(db, "parts", part.id);
-          const newBasePrice = part.newPrice;
-          const taxAmount = part.taxable ? newBasePrice * taxRate : 0;
-          const exFactPrice = newBasePrice + taxAmount;
-          
-          batch.update(partRef, {
-            price: newBasePrice,
-            previousPrice: part.price, // Save the old price
-            tax: taxAmount,
-            exFactPrice: exFactPrice,
-          });
-        }
-      });
+            const taxAmount = part.taxable ? currentPrice * taxRate : 0;
+            const exFactPrice = currentPrice + taxAmount;
+
+            batch.update(partRef, {
+                tax: taxAmount,
+                exFactPrice: exFactPrice,
+            });
+        });
 
       await batch.commit();
 
       toast({
         title: "Success",
-        description: `Tax rate and ${partsToUpdate.length} part price(s) have been updated successfully.`,
+        description: `Tax rate and ${updatedPricesCount} part price(s) have been updated successfully.`,
       });
       fetchInitialData(); // Re-fetch to show updated data
     } catch (error) {
@@ -145,7 +152,7 @@ export default function PriceManagementPage() {
         <CardHeader>
           <CardTitle>Global Tax Rate</CardTitle>
           <CardDescription>
-            Set the tax rate that applies to all taxable parts. Enter the rate as a decimal (e.g., 0.219 for 21.9%).
+            Set the tax rate that applies to all taxable parts. Enter the rate as a decimal (e.g., 0.219 for 21.9%). This will recalculate prices for all items.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -156,7 +163,7 @@ export default function PriceManagementPage() {
               type="number"
               step="0.001"
               value={taxRate}
-              onChange={(e) => setTaxRate(parseFloat(e.target.value))}
+              onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
               disabled={loading}
             />
           </div>

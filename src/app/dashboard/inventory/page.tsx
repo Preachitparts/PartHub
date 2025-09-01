@@ -40,6 +40,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { Part, TaxInvoice, TaxInvoiceItem } from "@/types";
 import Papa from "papaparse";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
+import { logActivity } from "@/lib/activity-log";
 
 
 const TAX_RATE = 0.219; // 21.9%
@@ -255,6 +256,7 @@ export default function InventoryPage() {
 
     batch.set(invoiceRef, newTaxInvoice);
     await batch.commit();
+    await logActivity(`Created new tax invoice ${invoiceId} from ${data.supplierName}.`);
   }
 
   async function updateExistingInvoice(data: TaxInvoiceFormValues) {
@@ -265,6 +267,7 @@ export default function InventoryPage() {
         supplierName: data.supplierName,
         supplierInvoiceNumber: data.invoiceNumber || '',
     });
+    await logActivity(`Updated supplier info for tax invoice from ${data.supplierName}.`);
   }
 
   const handleSaveItem = async (index: number) => {
@@ -306,11 +309,13 @@ export default function InventoryPage() {
                 finalItemData.partId = newPartId;
                 finalItemData.isNew = false; // It's no longer new
                 stockAdjustment = itemToSave.quantity; // Stock is just the new quantity
+                await logActivity(`Created new part '${itemToSave.name}' via tax invoice edit.`);
             } else if (itemToSave.partId) { // Updating an existing part
                  const partRef = doc(db, "parts", itemToSave.partId);
                  const originalQty = originalItem ? originalItem.quantity : 0;
                  stockAdjustment = itemToSave.quantity - originalQty;
                  transaction.update(partRef, { stock: increment(stockAdjustment) });
+                 await logActivity(`Adjusted stock for '${itemToSave.name}' by ${stockAdjustment} via tax invoice edit.`);
             }
 
             const updatedItems = originalItems.map(item => item.partId === finalItemData.partId ? finalItemData : item);
@@ -463,6 +468,7 @@ export default function InventoryPage() {
             title: "Import Successful",
             description: `Successfully imported ${invoiceItems.length} parts and created a new Tax Invoice.`,
           });
+          await logActivity(`Imported ${invoiceItems.length} parts from ${file.name}.`);
           await fetchData();
         } catch (error: any) {
            console.error("Error importing CSV:", error);
@@ -576,11 +582,11 @@ export default function InventoryPage() {
                                           </TableCell>
                                           <TableCell className="text-right">
                                                {dialogMode === 'edit' && (
-                                                <Button variant="ghost" size="icon" onClick={() => handleSaveItem(index)} disabled={isItemSaving}>
+                                                <Button type="button" variant="ghost" size="icon" onClick={() => handleSaveItem(index)} disabled={isItemSaving}>
                                                     {isItemSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 text-primary" />}
                                                 </Button>
                                                )}
-                                              <Button variant="ghost" size="icon" onClick={() => remove(index)}>
+                                              <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}>
                                                   <Trash2 className="h-4 w-4 text-destructive" />
                                               </Button>
                                           </TableCell>

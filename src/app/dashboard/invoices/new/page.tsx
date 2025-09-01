@@ -5,10 +5,11 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, runTransaction } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import type { Part, Invoice, InvoiceItem } from "@/types";
+import { logActivity } from "@/lib/activity-log";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -201,11 +202,11 @@ export default function NewInvoicePage() {
             // 2. Decrement stock for all items
             for (const item of data.items) {
                 const partRef = doc(db, "parts", item.partId);
-                transaction.update(partRef, { stock: -item.quantity });
+                transaction.update(partRef, { stock: increment(-item.quantity) });
             }
 
             // 3. Save the invoice
-            const invoiceToSave: Omit<Invoice, 'id' | 'date'> = {
+            const invoiceToSave: Omit<Invoice, 'id'> & {date?: any} = {
                 invoiceNumber: data.invoiceNumber,
                 customerName: data.customerName,
                 customerAddress: data.customerAddress || '',
@@ -226,6 +227,8 @@ export default function NewInvoicePage() {
             };
             transaction.set(invoiceRef, invoiceToSave);
         });
+
+      await logActivity(`Created sales invoice ${data.invoiceNumber} for ${data.customerName}.`);
 
       toast({
         title: "Invoice Saved",
@@ -398,7 +401,7 @@ export default function NewInvoicePage() {
                         GH₵{form.getValues(`items.${index}.total`).toFixed(2)}
                       </TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => remove(index)}>
+                        <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}>
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </TableCell>

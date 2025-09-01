@@ -1,16 +1,18 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, setDoc, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, setDoc, doc, getDoc, query, orderBy, limit } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Input } from "@/components/ui/input";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, List } from "lucide-react";
 import { PartsGrid } from "@/components/dashboard/parts-grid";
 import { SmartFilterForm } from "@/components/dashboard/smart-filter-form";
-import type { Part } from "@/types";
+import type { Part, ActivityLog } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const TAX_RATE = 0.219; // 21.9%
 
@@ -34,6 +36,59 @@ const generatePartsWithTax = (parts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[])
     };
   });
 };
+
+function ActivityLogComponent() {
+    const [logs, setLogs] = useState<ActivityLog[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchLogs = async () => {
+            setLoading(true);
+            try {
+                const logsQuery = query(collection(db, "activityLogs"), orderBy("date", "desc"), limit(20));
+                const querySnapshot = await getDocs(logsQuery);
+                const logsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityLog));
+                setLogs(logsList);
+            } catch (error) {
+                console.error("Error fetching activity logs: ", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchLogs();
+    }, []);
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2"><List /> Activity Log</CardTitle>
+                <CardDescription>A log of the most recent activities in the system.</CardDescription>
+            </CardHeader>
+            <CardContent>
+                {loading ? (
+                    <div className="flex justify-center items-center h-48">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    </div>
+                ) : logs.length > 0 ? (
+                    <ScrollArea className="h-72">
+                        <div className="space-y-4">
+                            {logs.map((log) => (
+                                <div key={log.id} className="flex items-start gap-4 text-sm">
+                                    <div className="text-muted-foreground pt-0.5">
+                                        {log.date ? log.date.toDate().toLocaleTimeString() : "..."}
+                                    </div>
+                                    <p className="flex-1">{log.description}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </ScrollArea>
+                ) : (
+                    <p className="text-muted-foreground text-center py-8">No activities have been logged yet.</p>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
 
 export default function DashboardPage() {
   const [parts, setParts] = useState<Part[]>([]);
@@ -123,15 +178,23 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <SmartFilterForm />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+            <SmartFilterForm />
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search by keyword, part number, or equipment model..."
-          className="pl-9"
-        />
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                placeholder="Search by keyword, part number, or equipment model..."
+                className="pl-9"
+                />
+            </div>
+        </div>
+        <div className="lg:col-span-1">
+            <ActivityLogComponent />
+        </div>
       </div>
+      
 
       {loading ? (
         <div className="flex justify-center items-center h-64">

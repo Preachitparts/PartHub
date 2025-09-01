@@ -60,3 +60,9 @@ export interface Invoice {
   tax: number;
   total: number;
 }
+
+export interface ActivityLog {
+    id: string;
+    description: string;
+    date: Timestamp;
+}

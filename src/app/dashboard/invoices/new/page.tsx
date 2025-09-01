@@ -56,6 +56,7 @@ const invoiceItemSchema = z.object({
   quantity: z.number().min(1, "Quantity must be at least 1."),
   unitPrice: z.number(), // The price before tax
   tax: z.number(),
+  exFactPrice: z.number(),
   total: z.number(), // The price after tax (exFactPrice * quantity)
 });
 
@@ -145,14 +146,16 @@ export default function NewInvoicePage() {
   const handlePartChange = (index: number, partId: string) => {
     const selectedPart = parts.find((p) => p.id === partId);
     if (selectedPart) {
+      const quantity = 1;
       update(index, {
         partId: selectedPart.id,
         partName: selectedPart.name,
         partNumber: selectedPart.partNumber,
-        quantity: 1,
+        quantity: quantity,
         unitPrice: selectedPart.price,
         tax: selectedPart.tax,
-        total: selectedPart.exFactPrice,
+        exFactPrice: selectedPart.exFactPrice,
+        total: selectedPart.exFactPrice * quantity,
       });
     }
   };
@@ -177,7 +180,7 @@ export default function NewInvoicePage() {
   };
 
   const addNewItem = () => {
-    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, partName: '', partNumber: '' });
+    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, exFactPrice: 0, partName: '', partNumber: '' });
   };
 
   async function onSubmit(data: InvoiceFormValues) {
@@ -219,6 +222,7 @@ export default function NewInvoicePage() {
                     quantity: i.quantity,
                     unitPrice: i.unitPrice,
                     tax: i.tax,
+                    exFactPrice: i.exFactPrice,
                     total: i.total,
                 })),
                 subtotal: data.subtotal,
@@ -395,10 +399,10 @@ export default function NewInvoicePage() {
                         />
                       </TableCell>
                       <TableCell className="text-right">
-                        GH₵{form.getValues(`items.${index}.unitPrice`).toFixed(2)}
+                        GHS {form.getValues(`items.${index}.unitPrice`).toFixed(2)}
                       </TableCell>
                        <TableCell className="text-right">
-                        GH₵{form.getValues(`items.${index}.total`).toFixed(2)}
+                        GHS {form.getValues(`items.${index}.total`).toFixed(2)}
                       </TableCell>
                       <TableCell>
                         <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}>
@@ -426,15 +430,15 @@ export default function NewInvoicePage() {
             <div className="w-full max-w-sm space-y-2">
                 <div className="flex justify-between">
                     <span>Subtotal</span>
-                    <span>GH₵{subtotal.toFixed(2)}</span>
+                    <span>GHS {subtotal.toFixed(2)}</span>
                 </div>
                  <div className="flex justify-between">
                     <span>Tax</span>
-                    <span>GH₵{taxAmount.toFixed(2)}</span>
+                    <span>GHS {taxAmount.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between font-bold text-lg">
                     <span>Total</span>
-                    <span>GH₵{total.toFixed(2)}</span>
+                    <span>GHS {total.toFixed(2)}</span>
                 </div>
             </div>
           </CardFooter>
@@ -443,3 +447,5 @@ export default function NewInvoicePage() {
     </Form>
   );
 }
+
+    

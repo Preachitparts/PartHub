@@ -98,11 +98,11 @@ export default function POSPage() {
               : item
           );
         } else {
-          toast({
-            variant: "destructive",
-            title: "Stock Limit Reached",
-            description: `No more ${part.name} in stock.`,
-          });
+            toast({
+                variant: "destructive",
+                title: "Stock Limit Reached",
+                description: `No more ${part.name} in stock.`,
+            });
           return currentCart;
         }
       }
@@ -203,6 +203,7 @@ export default function POSPage() {
                     quantity: i.quantity,
                     unitPrice: i.price,
                     tax: i.tax,
+                    exFactPrice: i.exFactPrice,
                     total: i.exFactPrice * i.quantity,
                 })),
                 subtotal: subtotal,
@@ -293,7 +294,7 @@ export default function POSPage() {
                            </div>
                         </TableCell>
                         <TableCell>{part.stock}</TableCell>
-                        <TableCell className="text-right">GH₵{part.exFactPrice.toFixed(2)}</TableCell>
+                        <TableCell className="text-right">GHS {part.exFactPrice.toFixed(2)}</TableCell>
                         <TableCell className="text-right">
                           <Button size="sm" onClick={() => addToCart(part)} disabled={part.stock === 0}>
                             <PlusCircle className="h-4 w-4" />
@@ -369,7 +370,7 @@ export default function POSPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          GH₵{(item.exFactPrice * item.quantity).toFixed(2)}
+                          GHS {(item.exFactPrice * item.quantity).toFixed(2)}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button
@@ -390,15 +391,15 @@ export default function POSPage() {
             <div className="mt-2 space-y-2 text-sm">
               <div className="flex justify-between">
                 <span>Subtotal</span>
-                <span>GH₵{subtotal.toFixed(2)}</span>
+                <span>GHS {subtotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Tax</span>
-                <span>GH₵{taxAmount.toFixed(2)}</span>
+                <span>GHS {taxAmount.toFixed(2)}</span>
               </div>
               <div className="flex justify-between font-bold text-base">
                 <span>Total</span>
-                <span>GH₵{total.toFixed(2)}</span>
+                <span>GHS {total.toFixed(2)}</span>
               </div>
             </div>
           </CardContent>
@@ -413,3 +414,5 @@ export default function POSPage() {
     </div>
   );
 }
+
+    

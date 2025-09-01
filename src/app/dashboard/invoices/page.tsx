@@ -70,20 +70,37 @@ export default function InvoicesPage() {
         const doc = new jsPDF() as jsPDFWithAutoTable;
         
         // Header
-        doc.setFontSize(20);
+        doc.setFontSize(22);
+        doc.setFont('helvetica', 'bold');
         doc.text("INVOICE", 14, 22);
-        doc.setFontSize(12);
-        doc.text("Preach it Parts & Equipment", 14, 30);
         
+        // Company Info
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text("Preach it Parts & Equipment", 140, 22);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text("Call/WhatsApp: +233 24 885 7278 / +233 24 376 2748", 140, 28);
+        doc.text("Loc: Tarkwa Tamso & Takoradi", 140, 33);
+        doc.text("www.preachitpartsandequipment.com", 140, 38);
+
         // Customer Info
         doc.setFontSize(10);
-        doc.text(`Invoice #: ${invoice.invoiceNumber}`, 14, 45);
-        doc.text(`Date: ${new Date(invoice.invoiceDate).toLocaleDateString()}`, 14, 50);
+        doc.setFont('helvetica', 'bold');
+        doc.text("Bill To:", 14, 45);
+        doc.setFont('helvetica', 'normal');
+        doc.text(invoice.customerName, 14, 51);
+        doc.text(invoice.customerAddress || '', 14, 56);
+        doc.text(invoice.customerPhone || '', 14, 61);
+
+        // Invoice Details
+        doc.setFont('helvetica', 'bold');
+        doc.text(`Invoice #:`, 140, 51);
+        doc.text(`Date:`, 140, 56);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${invoice.invoiceNumber}`, 160, 51);
+        doc.text(`${new Date(invoice.invoiceDate).toLocaleDateString()}`, 160, 56);
         
-        doc.text("Bill To:", 140, 45);
-        doc.text(invoice.customerName, 140, 50);
-        doc.text(invoice.customerAddress || '', 140, 55);
-        doc.text(invoice.customerPhone || '', 140, 60);
 
         // Table
         const tableColumn = ["Product Name", "Part Number", "Qty", "Unit Price", "Tax", "Total"];
@@ -96,7 +113,7 @@ export default function InvoicesPage() {
                 item.quantity,
                 `GHS ${item.unitPrice.toFixed(2)}`,
                 `GHS ${item.tax.toFixed(2)}`,
-                `GHS ${item.total.toFixed(2)}`
+                `GHS ${(item.exFactPrice * item.quantity).toFixed(2)}`
             ];
             tableRows.push(itemData);
         });
@@ -106,6 +123,7 @@ export default function InvoicesPage() {
             body: tableRows,
             startY: 70,
             headStyles: { fillColor: [41, 128, 185] },
+            styles: { fontSize: 9 },
         });
 
         // Totals
@@ -114,9 +132,9 @@ export default function InvoicesPage() {
         doc.text(`Subtotal: GHS ${invoice.subtotal.toFixed(2)}`, 140, finalY + 10);
         doc.text(`Tax: GHS ${invoice.tax.toFixed(2)}`, 140, finalY + 15);
         doc.setFontSize(12);
-        doc.setFont('bold');
+        doc.setFont('helvetica', 'bold');
         doc.text(`Total: GHS ${invoice.total.toFixed(2)}`, 140, finalY + 22);
-        doc.setFont('normal');
+        doc.setFont('helvetica', 'normal');
 
         // Footer
         doc.setFontSize(8);
@@ -173,7 +191,7 @@ export default function InvoicesPage() {
                                             <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
                                             <TableCell>{invoice.customerName}</TableCell>
                                             <TableCell>{new Date(invoice.invoiceDate).toLocaleDateString()}</TableCell>
-                                            <TableCell className="text-right">GH₵{invoice.total.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {invoice.total.toFixed(2)}</TableCell>
                                             <TableCell className="flex justify-center items-center">
                                                 <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
                                                     <Eye className="h-4 w-4" />
@@ -257,10 +275,10 @@ export default function InvoicesPage() {
                                         <TableRow key={index}>
                                             <TableCell>{item.partName}</TableCell>
                                             <TableCell>{item.partNumber}</TableCell>
-                                            <TableCell className="text-right">GH₵{item.unitPrice.toFixed(2)}</TableCell>
-                                            <TableCell className="text-right">GH₵{item.tax.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {item.unitPrice.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {item.tax.toFixed(2)}</TableCell>
                                             <TableCell className="text-right">{item.quantity}</TableCell>
-                                            <TableCell className="text-right">GH₵{item.total.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {(item.exFactPrice * item.quantity).toFixed(2)}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
@@ -270,15 +288,15 @@ export default function InvoicesPage() {
                             <div className="w-full max-w-xs space-y-2">
                                 <div className="flex justify-between">
                                     <span>Subtotal</span>
-                                    <span>GH₵{selectedInvoice.subtotal.toFixed(2)}</span>
+                                    <span>GHS {selectedInvoice.subtotal.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Tax</span>
-                                    <span>GH₵{selectedInvoice.tax.toFixed(2)}</span>
-                                </div>
+                                    <span>GHS {selectedInvoice.tax.toFixed(2)}</span>
+                                 </div>
                                 <div className="flex justify-between font-bold text-lg">
                                     <span>Total</span>
-                                    <span>GH₵{selectedInvoice.total.toFixed(2)}</span>
+                                    <span>GHS {selectedInvoice.total.toFixed(2)}</span>
                                 </div>
                             </div>
                         </div>
@@ -299,3 +317,5 @@ export default function InvoicesPage() {
         </div>
     )
 }
+
+    

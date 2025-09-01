@@ -46,6 +46,7 @@ export interface InvoiceItem {
   quantity: number;
   unitPrice: number; // Price before tax
   tax: number;
+  exFactPrice: number; // Price after tax
   total: number; // Total for this line (exFactPrice * quantity)
 }
 
@@ -68,3 +69,5 @@ export interface ActivityLog {
     description: string;
     date: Timestamp;
 }
+
+    

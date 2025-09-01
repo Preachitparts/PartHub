@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, runTransaction, increment, serverTimestamp, orderBy, query, getDoc } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, serverTimestamp, orderBy, query, getDoc, writeBatch } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter, useParams } from "next/navigation";
 import type { Part, Invoice, Customer, InvoiceItem } from "@/types";
@@ -80,7 +80,6 @@ export default function EditInvoicePage() {
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null);
 
   const invoiceForm = useForm<InvoiceFormValues>({
     resolver: zodResolver(invoiceSchema),
@@ -109,7 +108,6 @@ export default function EditInvoicePage() {
             const invoiceDoc = await getDoc(invoiceRef);
             if (invoiceDoc.exists()) {
                 const invoiceData = {id: invoiceDoc.id, ...invoiceDoc.data()} as Invoice;
-                setOriginalInvoice(invoiceData);
                 invoiceForm.reset({
                     invoiceNumber: invoiceData.invoiceNumber,
                     customerId: invoiceData.customerId,
@@ -200,55 +198,53 @@ export default function EditInvoicePage() {
   
   async function onSubmit(data: InvoiceFormValues) {
     setIsSaving(true);
-    if (!originalInvoice) {
-        toast({ variant: "destructive", title: "Error", description: "Original invoice data is missing. Cannot save." });
-        setIsSaving(false);
-        return;
-    }
-
+    
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
+            const invoiceDoc = await transaction.get(invoiceRef);
 
-            // Calculate stock changes
+            if (!invoiceDoc.exists()) {
+                throw new Error("Invoice not found. It may have been deleted.");
+            }
+            const originalInvoice = invoiceDoc.data() as Invoice;
+
             const stockChanges = new Map<string, number>();
 
-            // Add back original quantities
+            // Calculate stock changes: positive for items returned to stock, negative for items sold
             originalInvoice.items.forEach(item => {
                 stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
             });
 
-            // Subtract new quantities
             data.items.forEach(item => {
                 stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
             });
 
-            // Fetch all parts involved
+            // Fetch all parts involved to check stock
             const partIds = Array.from(stockChanges.keys());
             const partRefs = partIds.map(id => doc(db, "parts", id));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
 
-            const partMap = new Map<string, Part>();
+            const partsData: { [key: string]: Part } = {};
             partDocs.forEach(partDoc => {
                 if(partDoc.exists()) {
-                    partMap.set(partDoc.id, { id: partDoc.id, ...partDoc.data() } as Part);
+                    partsData[partDoc.id] = { id: partDoc.id, ...partDoc.data() } as Part;
                 }
             });
-
-            // Validate stock levels before writing
-            for (const [partId, change] of stockChanges.entries()) {
-                const part = partMap.get(partId);
-                if (part) {
-                    const newStock = part.stock + change;
-                    if (newStock < 0) {
-                        throw new Error(`Not enough stock for ${part.name}. Required: ${-change + part.stock}, Available: ${part.stock}`);
-                    }
-                } else if (change < 0) { // Item added that doesn't exist
-                    throw new Error(`Part with ID ${partId} not found.`);
+            
+            // Validate stock levels before writing any changes
+            for(const partId of partIds) {
+                const part = partsData[partId];
+                if (!part) throw new Error(`Part with ID ${partId} not found in database.`);
+                
+                const stockChange = stockChanges.get(partId) || 0;
+                const newStock = part.stock + stockChange;
+                if (newStock < 0) {
+                    throw new Error(`Not enough stock for ${part.name}. Required: ${Math.abs(stockChange)}, Available: ${part.stock}.`);
                 }
             }
-
-            // Apply stock changes
+            
+            // Apply stock changes if validation passes
             for (const [partId, change] of stockChanges.entries()) {
                 if (change !== 0) {
                     const partRef = doc(db, "parts", partId);
@@ -256,7 +252,7 @@ export default function EditInvoicePage() {
                 }
             }
             
-            // Update invoice
+            // Prepare and update the invoice
             const newTotal = data.items.reduce((acc, item) => acc + item.total, 0);
             const newBalanceDue = newTotal - data.paidAmount;
             const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';

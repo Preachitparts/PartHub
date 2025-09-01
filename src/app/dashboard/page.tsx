@@ -5,24 +5,32 @@ import { useEffect, useState } from "react";
 import { collection, getDocs, setDoc, doc, getDoc, query, orderBy, limit } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Input } from "@/components/ui/input";
-import { Search, Loader2, List } from "lucide-react";
+import { Search, Loader2, List, AlertTriangle } from "lucide-react";
 import { PartsGrid } from "@/components/dashboard/parts-grid";
 import { SmartFilterForm } from "@/components/dashboard/smart-filter-form";
 import type { Part, ActivityLog } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const TAX_RATE = 0.219; // 21.9%
 
 const mockParts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[] = [
-  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", partCode: "P001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://placehold.co/600x400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000", taxable: true, pricingType: "exclusive" },
-  { name: "Engine Air Filter", partNumber: "EAF-002", partCode: "P002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://placehold.co/600x400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300", taxable: true, pricingType: "exclusive" },
-  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", partCode: "P003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://placehold.co/600x400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10", taxable: true, pricingType: "exclusive" },
-  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", partCode: "P004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://placehold.co/600x400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900", taxable: true, pricingType: "exclusive" },
-  { name: "Turbocharger", partNumber: "TRB-CHR-005", partCode: "P005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://placehold.co/600x400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5", taxable: false, pricingType: "exclusive" },
-  { name: "Fuel Injector", partNumber: "FUL-INJ-006", partCode: "P006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://placehold.co/600x400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000", taxable: true, pricingType: "exclusive" },
+  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", partCode: "P001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://picsum.photos/600/400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000", taxable: true, pricingType: "exclusive" },
+  { name: "Engine Air Filter", partNumber: "EAF-002", partCode: "P002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://picsum.photos/600/400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300", taxable: true, pricingType: "exclusive" },
+  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", partCode: "P003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://picsum.photos/600/400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10", taxable: true, pricingType: "exclusive" },
+  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", partCode: "P004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://picsum.photos/600/400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900", taxable: true, pricingType: "exclusive" },
+  { name: "Turbocharger", partNumber: "TRB-CHR-005", partCode: "P005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://picsum.photos/600/400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5", taxable: false, pricingType: "exclusive" },
+  { name: "Fuel Injector", partNumber: "FUL-INJ-006", partCode: "P006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://picsum.photos/600/400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000", taxable: true, pricingType: "exclusive" },
 ];
 
 const generatePartsWithTax = (parts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[]): Omit<Part, 'id'>[] => {
@@ -50,6 +58,43 @@ const generatePartsWithTax = (parts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[])
     };
   });
 };
+
+function LowStockItems({ parts }: { parts: Part[] }) {
+    if (parts.length === 0) {
+        return null; // Don't render the card if there are no low stock items
+    }
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2"><AlertTriangle className="text-destructive" /> Low Stock Items</CardTitle>
+                <CardDescription>These items need your attention and may need to be reordered soon.</CardDescription>
+            </CardHeader>
+            <CardContent>
+                <ScrollArea className="h-72">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Part Name</TableHead>
+                                <TableHead>Part Number</TableHead>
+                                <TableHead className="text-right">Stock</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {parts.map((part) => (
+                                <TableRow key={part.id}>
+                                    <TableCell className="font-medium">{part.name}</TableCell>
+                                    <TableCell>{part.partNumber}</TableCell>
+                                    <TableCell className="text-right font-bold text-destructive">{part.stock}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </ScrollArea>
+            </CardContent>
+        </Card>
+    );
+}
 
 function ActivityLogComponent() {
     const [logs, setLogs] = useState<ActivityLog[]>([]);
@@ -106,6 +151,7 @@ function ActivityLogComponent() {
 
 export default function DashboardPage() {
   const [parts, setParts] = useState<Part[]>([]);
+  const [lowStockParts, setLowStockParts] = useState<Part[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const { toast } = useToast();
@@ -159,11 +205,13 @@ export default function DashboardPage() {
       if (partsSnapshot.empty) {
         console.log("No parts found in Firestore. The database may need to be seeded.");
         setParts([]);
+        setLowStockParts([]);
       } else {
         const partsList = partsSnapshot.docs.map(
           (doc) => ({ ...doc.data(), id: doc.id } as Part)
         );
         setParts(partsList);
+        setLowStockParts(partsList.filter(part => part.stock <= 2).sort((a,b) => a.stock - b.stock));
       }
     } catch (error) {
       console.error("Error fetching parts:", error);
@@ -181,6 +229,7 @@ export default function DashboardPage() {
         });
       }
       setParts([]); // Clear parts on error
+      setLowStockParts([]);
     } finally {
       setLoading(false);
     }
@@ -195,20 +244,20 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
             <SmartFilterForm />
-
-            <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                placeholder="Search by keyword, part number, or equipment model..."
-                className="pl-9"
-                />
-            </div>
         </div>
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 grid grid-cols-1 gap-6">
             <ActivityLogComponent />
+            <LowStockItems parts={lowStockParts} />
         </div>
       </div>
       
+      <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+          placeholder="Search by keyword, part number, or equipment model..."
+          className="pl-9"
+          />
+      </div>
 
       {loading ? (
         <div className="flex justify-center items-center h-64">
@@ -230,3 +279,5 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+    

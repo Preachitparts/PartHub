@@ -8,6 +8,7 @@ export interface Part {
   partCode: string;
   description: string;
   price: number; // This will be treated as the base price
+  previousPrice?: number; // To store the last price
   tax: number;
   exFactPrice: number;
   taxable: boolean;
@@ -53,7 +54,7 @@ export interface Invoice {
   customerName: string;
   customerAddress: string;
   customerPhone: string;
-  invoiceDate: string; // Stored as 'YYYY-MM-DD' string
+  invoiceDate: string; // Stored as 'YYYY-MM-DD'
   items: InvoiceItem[];
   subtotal: number;
   tax: number;

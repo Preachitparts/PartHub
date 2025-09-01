@@ -27,6 +27,7 @@ import {
   ShoppingCart,
   Settings,
   FileText,
+  Scale,
 } from "lucide-react";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Button } from "@/components/ui/button";
@@ -100,6 +101,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <Link href="/dashboard/inventory">
                   <Wrench />
                   Inventory
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname === '/dashboard/price-management'}>
+                <Link href="/dashboard/price-management">
+                  <Scale />
+                  Price Management
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

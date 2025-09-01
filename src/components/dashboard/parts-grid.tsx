@@ -49,7 +49,7 @@ export function PartsGrid({ parts }: PartsGridProps) {
             <Badge variant={part.stock > 0 ? "secondary" : "destructive"}>
               {part.stock > 0 ? `${part.stock} in stock` : "Out of stock"}
             </Badge>
-          </Footer>
+          </CardFooter>
         </Card>
       ))}
     </div>

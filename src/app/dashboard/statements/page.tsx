@@ -109,7 +109,7 @@ export default function StatementsPage() {
   };
   
   const totalBalanceDue = useMemo(() => {
-    return customerInvoices.reduce((acc, inv) => acc + inv.balanceDue, 0);
+    return customerInvoices.reduce((acc, inv) => acc + (inv.balanceDue || 0), 0);
   }, [customerInvoices]);
 
   const handleDownloadCsv = () => {
@@ -119,9 +119,9 @@ export default function StatementsPage() {
       "Invoice #": inv.invoiceNumber,
       "Invoice Date": inv.invoiceDate,
       "Due Date": inv.dueDate,
-      "Total": inv.total,
-      "Paid Amount": inv.paidAmount,
-      "Balance Due": inv.balanceDue,
+      "Total": inv.total.toFixed(2),
+      "Paid Amount": inv.paidAmount.toFixed(2),
+      "Balance Due": (inv.balanceDue || 0).toFixed(2),
       "Status": inv.status
     }));
 
@@ -159,7 +159,7 @@ export default function StatementsPage() {
         inv.dueDate,
         `GHS ${inv.total.toFixed(2)}`,
         `GHS ${inv.paidAmount.toFixed(2)}`,
-        `GHS ${inv.balanceDue.toFixed(2)}`,
+        `GHS ${(inv.balanceDue || 0).toFixed(2)}`,
         inv.status
       ];
       tableRows.push(row);
@@ -257,7 +257,7 @@ export default function StatementsPage() {
                       </TableCell>
                       <TableCell className="text-right">GHS {invoice.total.toFixed(2)}</TableCell>
                       <TableCell className="text-right">GHS {invoice.paidAmount.toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-bold">GHS {invoice.balanceDue.toFixed(2)}</TableCell>
+                      <TableCell className="text-right font-bold">GHS {(invoice.balanceDue || 0).toFixed(2)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

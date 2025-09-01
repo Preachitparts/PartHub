@@ -89,7 +89,7 @@ export default function CustomersPage() {
 
       const customersWithBalance = customersList.map(customer => {
         const customerInvoices = allInvoices.filter(inv => inv.customerId === customer.id);
-        const balance = customerInvoices.reduce((acc, inv) => acc + inv.balanceDue, 0);
+        const balance = customerInvoices.reduce((acc, inv) => acc + (inv.balanceDue || 0), 0);
         return { ...customer, balance: balance };
       });
       
@@ -322,4 +322,3 @@ export default function CustomersPage() {
     </div>
   );
 }
-

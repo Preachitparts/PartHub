@@ -8,11 +8,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
-import { PlusCircle, Loader2, Eye, Pencil } from "lucide-react";
+import { PlusCircle, Loader2, Eye, Pencil, Download } from "lucide-react";
 import Link from "next/link";
 import { useToast } from "@/hooks/use-toast";
 import type { Invoice } from "@/types";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+
+// Extend jsPDF with autoTable method
+interface jsPDFWithAutoTable extends jsPDF {
+  autoTable: (options: any) => jsPDF;
+}
+
 
 export default function InvoicesPage() {
     const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -27,7 +36,15 @@ export default function InvoicesPage() {
             try {
                 const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "desc"));
                 const querySnapshot = await getDocs(invoicesQuery);
-                const invoicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
+                const invoicesList = querySnapshot.docs.map(doc => {
+                    const data = doc.data();
+                    return {
+                        id: doc.id,
+                        ...data,
+                        // Ensure invoiceDate is a Date object for calculations
+                        invoiceDateObject: new Date(data.invoiceDate),
+                    } as Invoice & { invoiceDateObject: Date };
+                });
                 setInvoices(invoicesList);
             } catch (error) {
                 console.error("Error fetching invoices: ", error);
@@ -49,6 +66,74 @@ export default function InvoicesPage() {
         setIsViewDialogOpen(true);
     };
 
+    const handleDownloadPdf = (invoice: Invoice) => {
+        const doc = new jsPDF() as jsPDFWithAutoTable;
+        
+        // Header
+        doc.setFontSize(20);
+        doc.text("INVOICE", 14, 22);
+        doc.setFontSize(12);
+        doc.text("Preach it Parts & Equipment", 14, 30);
+        
+        // Customer Info
+        doc.setFontSize(10);
+        doc.text(`Invoice #: ${invoice.invoiceNumber}`, 14, 45);
+        doc.text(`Date: ${new Date(invoice.invoiceDate).toLocaleDateString()}`, 14, 50);
+        
+        doc.text("Bill To:", 140, 45);
+        doc.text(invoice.customerName, 140, 50);
+        doc.text(invoice.customerAddress || '', 140, 55);
+        doc.text(invoice.customerPhone || '', 140, 60);
+
+        // Table
+        const tableColumn = ["Product Name", "Part Number", "Qty", "Unit Price", "Tax", "Total"];
+        const tableRows: any[] = [];
+
+        invoice.items.forEach(item => {
+            const itemData = [
+                item.partName,
+                item.partNumber,
+                item.quantity,
+                `GH₵${item.unitPrice.toFixed(2)}`,
+                `GH₵${item.tax.toFixed(2)}`,
+                `GH₵${item.total.toFixed(2)}`
+            ];
+            tableRows.push(itemData);
+        });
+
+        doc.autoTable({
+            head: [tableColumn],
+            body: tableRows,
+            startY: 70,
+            headStyles: { fillColor: [41, 128, 185] },
+        });
+
+        // Totals
+        const finalY = doc.autoTable.previous.finalY;
+        doc.setFontSize(10);
+        doc.text(`Subtotal: GH₵${invoice.subtotal.toFixed(2)}`, 140, finalY + 10);
+        doc.text(`Tax: GH₵${invoice.tax.toFixed(2)}`, 140, finalY + 15);
+        doc.setFontSize(12);
+        doc.setFont('bold');
+        doc.text(`Total: GH₵${invoice.total.toFixed(2)}`, 140, finalY + 22);
+        doc.setFont('normal');
+
+        // Footer
+        doc.setFontSize(8);
+        doc.text("Thank you for your business!", 14, doc.internal.pageSize.height - 10);
+
+        doc.save(`Invoice-${invoice.invoiceNumber}.pdf`);
+        toast({ title: "Download Started", description: "Your invoice PDF is being downloaded." });
+    };
+
+    const isEditable = (invoice: Invoice & { invoiceDateObject?: Date }) => {
+        if (!invoice.invoiceDateObject) return false;
+        const now = new Date();
+        const invoiceDate = invoice.invoiceDateObject;
+        const hoursDifference = (now.getTime() - invoiceDate.getTime()) / (1000 * 60 * 60);
+        return hoursDifference <= 72;
+    };
+
     return (
         <div className="flex flex-col gap-6">
             <div className="flex justify-between items-center">
@@ -62,7 +147,7 @@ export default function InvoicesPage() {
             <Card>
                 <CardHeader>
                     <CardTitle>Invoice History</CardTitle>
-                    <CardDescription>View and manage all your past invoices.</CardDescription>
+                    <CardDescription>View and manage all your past invoices. Invoices can no longer be edited after 72 hours.</CardDescription>
                 </CardHeader>
                 <CardContent>
                     {loading ? (
@@ -77,26 +162,45 @@ export default function InvoicesPage() {
                                     <TableHead>Customer</TableHead>
                                     <TableHead>Date</TableHead>
                                     <TableHead className="text-right">Total Amount</TableHead>
-                                    <TableHead>Actions</TableHead>
+                                    <TableHead className="text-center">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {invoices.map((invoice) => (
-                                    <TableRow key={invoice.id}>
-                                        <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
-                                        <TableCell>{invoice.customerName}</TableCell>
-                                        <TableCell>{new Date(invoice.invoiceDate).toLocaleDateString()}</TableCell>
-                                        <TableCell className="text-right">GH₵{invoice.total.toFixed(2)}</TableCell>
-                                        <TableCell>
-                                            <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
-                                                <Eye className="h-4 w-4" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" disabled>
-                                                <Pencil className="h-4 w-4" />
-                                            </Button>
-                                        </TableCell>
-                                    </TableRow>
-                                ))}
+                                {invoices.map((invoice) => {
+                                    const canEdit = isEditable(invoice as Invoice & { invoiceDateObject: Date });
+                                    return (
+                                        <TableRow key={invoice.id}>
+                                            <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
+                                            <TableCell>{invoice.customerName}</TableCell>
+                                            <TableCell>{new Date(invoice.invoiceDate).toLocaleDateString()}</TableCell>
+                                            <TableCell className="text-right">GH₵{invoice.total.toFixed(2)}</TableCell>
+                                            <TableCell className="flex justify-center items-center">
+                                                <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
+                                                    <Eye className="h-4 w-4" />
+                                                </Button>
+                                                <TooltipProvider>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <span tabIndex={0}>
+                                                                <Button variant="ghost" size="icon" disabled>
+                                                                    <Pencil className="h-4 w-4" />
+                                                                </Button>
+                                                            </span>
+                                                        </TooltipTrigger>
+                                                        { !canEdit &&
+                                                            <TooltipContent>
+                                                                <p>Editing is locked after 72 hours.</p>
+                                                            </TooltipContent>
+                                                        }
+                                                    </Tooltip>
+                                                </TooltipProvider>
+                                                 <Button variant="ghost" size="icon" onClick={() => handleDownloadPdf(invoice)}>
+                                                    <Download className="h-4 w-4" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    )
+                                })}
                             </TableBody>
                         </Table>
                     ) : (
@@ -181,6 +285,10 @@ export default function InvoicesPage() {
                     </div>
                 )}
                 <DialogFooter>
+                    <Button variant="secondary" onClick={() => selectedInvoice && handleDownloadPdf(selectedInvoice)}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Download PDF
+                    </Button>
                     <DialogClose asChild>
                         <Button variant="outline">Close</Button>
                     </DialogClose>

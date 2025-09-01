@@ -56,6 +56,7 @@ export interface Invoice {
   customerAddress: string;
   customerPhone: string;
   invoiceDate: string; // Stored as 'YYYY-MM-DD'
+  invoiceDateObject?: Date; // Added on the client for date calculations
   items: InvoiceItem[];
   subtotal: number;
   tax: number;

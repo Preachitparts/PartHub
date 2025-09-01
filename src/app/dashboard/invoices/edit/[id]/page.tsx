@@ -83,7 +83,6 @@ export default function EditInvoicePage() {
   const [parts, setParts] = useState<Part[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
-  const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   
@@ -112,7 +111,6 @@ export default function EditInvoicePage() {
             const invoiceDoc = await getDoc(invoiceRef);
             if (invoiceDoc.exists()) {
                 const invoiceData = invoiceDoc.data() as Invoice;
-                setOriginalInvoice(invoiceData);
                 invoiceForm.reset({
                     ...invoiceData,
                     paidAmount: invoiceData.paidAmount || 0,
@@ -195,7 +193,6 @@ export default function EditInvoicePage() {
   };
 
   async function onInvoiceSubmit(data: InvoiceFormValues) {
-    if (!originalInvoice) return;
     setIsSaving(true);
     const selectedCustomer = customers.find(c => c.id === data.customerId);
     if (!selectedCustomer) {
@@ -207,30 +204,33 @@ export default function EditInvoicePage() {
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-            const partRefsAndDocs: { [key: string]: { ref: any, doc?: any } } = {};
-            const allPartIds = new Set([...originalInvoice.items.map(i => i.partId), ...data.items.map(i => i.partId)]);
 
-            // Pre-fetch all parts involved in the transaction
-            for (const partId of allPartIds) {
-                const partRef = doc(db, "parts", partId);
-                const partDoc = await transaction.get(partRef);
-                if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
-                partRefsAndDocs[partId] = { ref: partRef, doc: partDoc };
+            // Fetch the invoice from within the transaction to get the latest state
+            const freshInvoiceDoc = await transaction.get(invoiceRef);
+            if (!freshInvoiceDoc.exists()) {
+              throw new Error("Invoice does not exist.");
             }
+            const originalInvoiceData = freshInvoiceDoc.data() as Invoice;
+
 
             // Step 1: Revert original stock quantities
-            for (const item of originalInvoice.items) {
-                transaction.update(partRefsAndDocs[item.partId].ref, { stock: increment(item.quantity) });
+            for (const item of originalInvoiceData.items) {
+                const partRef = doc(db, "parts", item.partId);
+                transaction.update(partRef, { stock: increment(item.quantity) });
             }
 
             // Step 2: Check stock for and decrement new quantities
             for (const item of data.items) {
-                const partDoc = await transaction.get(partRefsAndDocs[item.partId].ref);
-                const currentStock = partDoc.data()?.stock;
+                const partRef = doc(db, "parts", item.partId);
+                const partDoc = await transaction.get(partRef); // Get part doc after reversion
+                if (!partDoc.exists()) {
+                    throw new Error(`Part with ID ${item.partId} not found.`);
+                }
+                const currentStock = partDoc.data().stock;
                 if (currentStock < item.quantity) {
                     throw new Error(`Not enough stock for ${item.partName}. Available: ${currentStock}, Requested: ${item.quantity}`);
                 }
-                transaction.update(partRefsAndDocs[item.partId].ref, { stock: increment(-item.quantity) });
+                transaction.update(partRef, { stock: increment(-item.quantity) });
             }
 
             // Step 3: Update the invoice

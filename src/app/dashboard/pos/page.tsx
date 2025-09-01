@@ -123,7 +123,9 @@ export default function POSPage() {
             title: "Stock Limit Reached",
             description: `Only ${partInCatalog.stock} items available.`,
           });
-        return currentCart;
+        return currentCart.map((item) =>
+        item.id === partId ? { ...item, quantity: partInCatalog.stock } : item
+      );
       }
       return currentCart.map((item) =>
         item.id === partId ? { ...item, quantity: newQuantity } : item

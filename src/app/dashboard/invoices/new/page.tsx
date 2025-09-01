@@ -53,9 +53,9 @@ const invoiceItemSchema = z.object({
   partId: z.string().min(1, "Please select a part."),
   partName: z.string(),
   partNumber: z.string(),
-  quantity: z.number().min(1, "Quantity must be at least 1."),
-  unitPrice: z.number(), // The price before tax
-  tax: z.number(),
+  quantity: z.preprocess((a) => parseInt(z.string().parse(a || "0"), 10), z.number().int().min(1, "Quantity must be at least 1.")),
+  unitPrice: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number()),
+  tax: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number()),
   exFactPrice: z.number(),
   total: z.number(), // The price after tax (exFactPrice * quantity)
 });
@@ -126,11 +126,11 @@ export default function NewInvoicePage() {
 
   const { subtotal, taxAmount, total } = useMemo(() => {
     const subtotal = watchItems.reduce(
-      (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 0),
+      (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
     );
     const taxAmount = watchItems.reduce(
-      (acc, item) => acc + (item.tax || 0) * (item.quantity || 0),
+      (acc, item) => acc + (item.tax || 0) * (item.quantity || 1),
       0
     );
     const total = subtotal + taxAmount;
@@ -147,36 +147,51 @@ export default function NewInvoicePage() {
     const selectedPart = parts.find((p) => p.id === partId);
     if (selectedPart) {
       const quantity = 1;
+      const unitPrice = selectedPart.price;
+      const tax = selectedPart.tax;
+      const exFactPrice = selectedPart.exFactPrice;
+      const total = exFactPrice * quantity;
+
       update(index, {
         partId: selectedPart.id,
         partName: selectedPart.name,
         partNumber: selectedPart.partNumber,
         quantity: quantity,
-        unitPrice: selectedPart.price,
-        tax: selectedPart.tax,
-        exFactPrice: selectedPart.exFactPrice,
-        total: selectedPart.exFactPrice * quantity,
+        unitPrice,
+        tax,
+        exFactPrice,
+        total
       });
     }
   };
 
-  const handleQuantityChange = (index: number, quantity: number) => {
-     const item = form.getValues(`items.${index}`);
-     const selectedPart = parts.find((p) => p.id === item.partId);
-     if(selectedPart && quantity > selectedPart.stock) {
-        toast({
-            variant: "destructive",
-            title: "Stock limit exceeded",
-            description: `Only ${selectedPart.stock} units of ${selectedPart.name} available.`,
-        });
-        quantity = selectedPart.stock;
-     }
+  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice' | 'tax', value: number) => {
+    const item = form.getValues(`items.${index}`);
+    if (!item) return;
 
-     if(quantity < 1) quantity = 1;
-     
-     const partPrice = selectedPart?.exFactPrice || 0;
-     const total = partPrice * quantity;
-     update(index, { ...item, quantity, total });
+    const currentItem = { ...item, [field]: value };
+    
+    if (field === 'quantity') {
+        const selectedPart = parts.find((p) => p.id === item.partId);
+        if(selectedPart && value > selectedPart.stock) {
+            toast({
+                variant: "destructive",
+                title: "Stock limit exceeded",
+                description: `Only ${selectedPart.stock} units of ${selectedPart.name} available.`,
+            });
+            currentItem.quantity = selectedPart.stock;
+        }
+        if(value < 1) currentItem.quantity = 1;
+    }
+
+    const exFactPrice = (currentItem.unitPrice || 0) + (currentItem.tax || 0);
+    const total = exFactPrice * (currentItem.quantity || 1);
+    
+    update(index, {
+      ...currentItem,
+      exFactPrice,
+      total,
+    });
   };
 
   const addNewItem = () => {
@@ -222,8 +237,8 @@ export default function NewInvoicePage() {
                     quantity: i.quantity,
                     unitPrice: i.unitPrice,
                     tax: i.tax,
-                    exFactPrice: i.exFactPrice,
-                    total: i.total,
+                    exFactPrice: (i.unitPrice || 0) + (i.tax || 0),
+                    total: ((i.unitPrice || 0) + (i.tax || 0)) * (i.quantity || 1),
                 })),
                 subtotal: data.subtotal,
                 tax: data.tax,
@@ -356,9 +371,10 @@ export default function NewInvoicePage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[40%]">Product</TableHead>
+                    <TableHead className="w-[35%]">Product</TableHead>
                     <TableHead>Qty</TableHead>
-                    <TableHead className="text-right">Unit Price</TableHead>
+                    <TableHead>Unit Price</TableHead>
+                    <TableHead>Tax</TableHead>
                     <TableHead className="text-right">Total</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
@@ -393,16 +409,32 @@ export default function NewInvoicePage() {
                       <TableCell>
                         <Input
                           type="number"
-                          {...form.register(`items.${index}.quantity`, { valueAsNumber: true })}
-                          onChange={(e) => handleQuantityChange(index, parseInt(e.target.value))}
+                          defaultValue={1}
+                          {...form.register(`items.${index}.quantity`)}
+                          onChange={(e) => handleItemChange(index, 'quantity', parseInt(e.target.value))}
                           className="w-20"
                         />
                       </TableCell>
-                      <TableCell className="text-right">
-                        GHS {form.getValues(`items.${index}.unitPrice`).toFixed(2)}
+                      <TableCell>
+                         <Input
+                          type="number"
+                          step="0.01"
+                           {...form.register(`items.${index}.unitPrice`)}
+                          onChange={(e) => handleItemChange(index, 'unitPrice', parseFloat(e.target.value))}
+                          className="w-24"
+                        />
+                      </TableCell>
+                       <TableCell>
+                         <Input
+                          type="number"
+                          step="0.01"
+                           {...form.register(`items.${index}.tax`)}
+                          onChange={(e) => handleItemChange(index, 'tax', parseFloat(e.target.value))}
+                          className="w-24"
+                        />
                       </TableCell>
                        <TableCell className="text-right">
-                        GHS {form.getValues(`items.${index}.total`).toFixed(2)}
+                        GHS {watchItems[index]?.total.toFixed(2) || '0.00'}
                       </TableCell>
                       <TableCell>
                         <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}>

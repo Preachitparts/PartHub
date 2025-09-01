@@ -39,6 +39,9 @@ import { Label } from "@/components/ui/label";
 
 interface CartItem extends Part {
   quantity: number;
+  // Allow overriding price and tax for the sale
+  salePrice: number;
+  saleTax: number;
 }
 
 export default function POSPage() {
@@ -107,7 +110,7 @@ export default function POSPage() {
         }
       }
       if (part.stock > 0) {
-        return [...currentCart, { ...part, quantity: 1 }];
+        return [...currentCart, { ...part, quantity: 1, salePrice: part.price, saleTax: part.tax }];
       } else {
          toast({
             variant: "destructive",
@@ -119,27 +122,33 @@ export default function POSPage() {
     });
   };
 
-  const updateQuantity = (partId: string, newQuantity: number) => {
+  const updateCartItem = (partId: string, field: 'quantity' | 'salePrice' | 'saleTax', value: number) => {
     setCart((currentCart) => {
       const partInCatalog = parts.find(p => p.id === partId);
       if (!partInCatalog) return currentCart;
 
-      if (newQuantity <= 0) {
-        return currentCart.filter((item) => item.id !== partId);
-      }
-      if (newQuantity > partInCatalog.stock) {
-         toast({
-            variant: "destructive",
-            title: "Stock Limit Reached",
-            description: `Only ${partInCatalog.stock} items available.`,
-          });
-        return currentCart.map((item) =>
-        item.id === partId ? { ...item, quantity: partInCatalog.stock } : item
-      );
-      }
-      return currentCart.map((item) =>
-        item.id === partId ? { ...item, quantity: newQuantity } : item
-      );
+      return currentCart.map((item) => {
+        if (item.id === partId) {
+          const updatedItem = { ...item, [field]: value };
+
+          if (field === 'quantity') {
+            if (value <= 0) {
+              // This will be filtered out later
+              return { ...updatedItem, quantity: 0 };
+            }
+            if (value > partInCatalog.stock) {
+              toast({
+                variant: "destructive",
+                title: "Stock Limit Reached",
+                description: `Only ${partInCatalog.stock} items available.`,
+              });
+              return { ...item, quantity: partInCatalog.stock };
+            }
+          }
+          return updatedItem;
+        }
+        return item;
+      }).filter(item => item.quantity > 0); // Remove items with quantity 0
     });
   };
 
@@ -148,8 +157,8 @@ export default function POSPage() {
   };
   
   const {subtotal, taxAmount, total} = useMemo(() => {
-    const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
-    const taxAmount = cart.reduce((acc, item) => acc + item.tax * item.quantity, 0);
+    const subtotal = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
+    const taxAmount = cart.reduce((acc, item) => acc + item.saleTax * item.quantity, 0);
     const total = subtotal + taxAmount;
     return { subtotal, taxAmount, total };
   }, [cart]);
@@ -201,10 +210,10 @@ export default function POSPage() {
                     partName: i.name,
                     partNumber: i.partNumber,
                     quantity: i.quantity,
-                    unitPrice: i.price,
-                    tax: i.tax,
-                    exFactPrice: i.exFactPrice,
-                    total: i.exFactPrice * i.quantity,
+                    unitPrice: i.salePrice,
+                    tax: i.saleTax,
+                    exFactPrice: i.salePrice + i.saleTax,
+                    total: (i.salePrice + i.saleTax) * i.quantity,
                 })),
                 subtotal: subtotal,
                 tax: taxAmount,
@@ -340,7 +349,8 @@ export default function POSPage() {
                   <TableRow>
                     <TableHead>Item</TableHead>
                     <TableHead>Qty</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
+                    <TableHead>Price</TableHead>
+                    <TableHead>Tax</TableHead>
                     <TableHead className="w-[40px]"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -348,7 +358,7 @@ export default function POSPage() {
                   {cart.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={4}
+                        colSpan={5}
                         className="text-center text-muted-foreground py-4"
                       >
                         Cart is empty
@@ -359,18 +369,30 @@ export default function POSPage() {
                       <TableRow key={item.id}>
                         <TableCell className="font-medium line-clamp-2 pr-1">{item.name}</TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-1">
-                             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateQuantity(item.id, item.quantity - 1)}>
-                                <MinusCircle className="h-4 w-4"/>
-                             </Button>
-                             <span className="w-4 text-center">{item.quantity}</span>
-                              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateQuantity(item.id, item.quantity + 1)}>
-                                <PlusCircle className="h-4 w-4"/>
-                             </Button>
-                          </div>
+                          <Input 
+                            type="number" 
+                            className="w-16" 
+                            value={item.quantity}
+                            onChange={(e) => updateCartItem(item.id, 'quantity', parseInt(e.target.value))}
+                          />
                         </TableCell>
-                        <TableCell className="text-right">
-                          GHS {(item.exFactPrice * item.quantity).toFixed(2)}
+                         <TableCell>
+                          <Input 
+                            type="number" 
+                            step="0.01"
+                            className="w-20" 
+                            value={item.salePrice}
+                            onChange={(e) => updateCartItem(item.id, 'salePrice', parseFloat(e.target.value))}
+                          />
+                        </TableCell>
+                         <TableCell>
+                          <Input 
+                            type="number" 
+                            step="0.01"
+                            className="w-20" 
+                            value={item.saleTax}
+                            onChange={(e) => updateCartItem(item.id, 'saleTax', parseFloat(e.target.value))}
+                          />
                         </TableCell>
                         <TableCell className="text-right">
                           <Button

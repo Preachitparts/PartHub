@@ -1,8 +1,8 @@
 
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { collection, getDocs, setDoc, doc, writeBatch, updateDoc, increment } from "firebase/firestore";
+import { useEffect, useState, useRef, useMemo } from "react";
+import { collection, getDocs, setDoc, doc, writeBatch, increment, Timestamp, query, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,18 +27,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Loader2, Upload, Download, Trash2 } from "lucide-react";
-import { useForm, useFieldArray, Controller } from "react-hook-form";
+import { PlusCircle, Loader2, Upload, Download, Trash2, Eye } from "lucide-react";
+import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
-import type { Part } from "@/types";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import type { Part, TaxInvoice } from "@/types";
 import Papa from "papaparse";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 
@@ -64,6 +61,7 @@ type TaxInvoiceFormValues = z.infer<typeof taxInvoiceSchema>;
 
 export default function InventoryPage() {
   const [parts, setParts] = useState<Part[]>([]);
+  const [taxInvoices, setTaxInvoices] = useState<TaxInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -86,9 +84,16 @@ export default function InventoryPage() {
     name: "items",
   });
 
-  const fetchParts = async () => {
+  const watchItems = form.watch("items");
+
+  const totalAmount = useMemo(() => {
+    return watchItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+  }, [watchItems]);
+
+  const fetchData = async () => {
     setLoading(true);
     try {
+      // Fetch parts for the combobox
       const partsCollection = collection(db, "parts");
       const partsSnapshot = await getDocs(partsCollection);
       const partsList = partsSnapshot.docs.map(
@@ -100,23 +105,29 @@ export default function InventoryPage() {
         value: part.id,
         label: `${part.name} (${part.partNumber})`
       }));
-      // Add option to create a new part
       options.unshift({ value: "new-part", label: "Create a new part..." });
       setPartOptions(options);
+
+      // Fetch tax invoices for the main table
+      const taxInvoicesQuery = query(collection(db, "taxInvoices"), orderBy("date", "desc"));
+      const invoicesSnapshot = await getDocs(taxInvoicesQuery);
+      const invoicesList = invoicesSnapshot.docs.map(doc => ({...doc.data(), id: doc.id} as TaxInvoice));
+      setTaxInvoices(invoicesList);
 
     } catch (error) {
        toast({
           variant: "destructive",
           title: "Error Fetching Data",
-          description: "Could not fetch parts from Firestore.",
+          description: "Could not fetch data from Firestore. Check console for details.",
         });
+        console.error("Error fetching data:", error);
     } finally {
         setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchParts();
+    fetchData();
   }, []);
 
   const handlePartSelection = (index: number, value: string) => {
@@ -140,26 +151,28 @@ export default function InventoryPage() {
                 quantity: 1,
                 isNew: false,
             });
+            form.setValue(`items.${index}.price`, selectedPart.price); // Ensure price is updated in the form state
         }
     }
   };
 
   async function onSubmit(data: TaxInvoiceFormValues) {
     setIsSaving(true);
-    const batch = writeBatch(db);
+    const partsBatch = writeBatch(db);
     try {
+        const newPartsData: Omit<Part, 'id'>[] = [];
+        
         for (const item of data.items) {
             if (item.isNew) {
-                // Add a brand new part to the inventory
-                const newPartId = (Date.now() + Math.random()).toString(36);
-                const tax = item.price * TAX_RATE; // Assuming new parts are taxable
+                // Prepare to add a brand new part to the inventory
+                const tax = item.price * TAX_RATE;
                 const exFactPrice = item.price + tax;
 
                 const newPartData: Omit<Part, 'id'> = {
                     name: item.name,
                     partNumber: item.partNumber,
-                    partCode: item.partNumber, // Default part code
-                    description: '', // Can be added later
+                    partCode: item.partNumber, 
+                    description: '', 
                     price: item.price,
                     stock: item.quantity,
                     taxable: true,
@@ -170,27 +183,42 @@ export default function InventoryPage() {
                     equipmentModel: '',
                     imageUrl: "https://placehold.co/600x400",
                 };
-                const partRef = doc(db, "parts", newPartId);
-                batch.set(partRef, newPartData);
+
+                const partId = doc(collection(db, "parts")).id;
+                const partRef = doc(db, "parts", partId);
+                partsBatch.set(partRef, newPartData);
             } else if (item.partId) {
                 // Update stock for an existing part
                 const partRef = doc(db, "parts", item.partId);
-                batch.update(partRef, {
+                partsBatch.update(partRef, {
                     stock: increment(item.quantity)
                 });
             }
         }
       
-      await batch.commit();
+        await partsBatch.commit();
+        
+        // Now create the Tax Invoice document
+        const invoiceId = `SUP-${Date.now().toString().slice(-8)}`;
+        const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
+            invoiceId,
+            supplierName: data.supplierName,
+            supplierInvoiceNumber: data.invoiceNumber || '',
+            date: Timestamp.now(),
+            totalAmount,
+            items: data.items.map(i => ({...i})), // ensure plain objects
+        };
+
+        await setDoc(doc(db, "taxInvoices", invoiceId), newTaxInvoice);
       
-      toast({
-        title: "Inventory Updated",
-        description: `Successfully updated stock from invoice.`,
-      });
+        toast({
+            title: "Inventory Updated",
+            description: `Successfully created Tax Invoice ${invoiceId} and updated stock.`,
+        });
       
-      form.reset();
-      setIsDialogOpen(false);
-      fetchParts(); // Refresh the list
+        form.reset();
+        setIsDialogOpen(false);
+        fetchData(); // Refresh both parts and invoices list
     } catch (error) {
       console.error("Error saving invoice:", error);
       toast({
@@ -209,35 +237,28 @@ export default function InventoryPage() {
 
 
   const handleExport = () => {
-    const csvData = Papa.unparse(parts.map(p => ({
-        ID: p.id,
-        Name: p.name,
-        PartNumber: p.partNumber,
-        PartCode: p.partCode,
-        Description: p.description,
-        Stock: p.stock,
-        Price: p.price,
-        Tax: p.tax,
-        ExFactoryPrice: p.exFactPrice,
-        Taxable: p.taxable,
-        Brand: p.brand,
-        Category: p.category,
-        EquipmentModel: p.equipmentModel,
-        ImageURL: p.imageUrl,
+    const csvData = Papa.unparse(taxInvoices.map(inv => ({
+        InvoiceID: inv.invoiceId,
+        Supplier: inv.supplierName,
+        Date: inv.date.toDate().toLocaleDateString(),
+        TotalAmount: inv.totalAmount.toFixed(2),
+        ItemCount: inv.items.length,
     })));
 
     const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', 'inventory.csv');
+    link.setAttribute('download', 'tax_invoices.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     
-    toast({ title: "Export Successful", description: "Inventory data has been downloaded." });
+    toast({ title: "Export Successful", description: "Tax invoice data has been downloaded." });
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    // This is now more complex as we import parts, not invoices.
+    // Keeping part import functionality as requested earlier.
     const file = event.target.files?.[0];
     if (file) {
       parseCsv(file);
@@ -270,7 +291,7 @@ export default function InventoryPage() {
                 const taxable = (row['Taxable'] || row['taxable'] || 'true').toLowerCase() === 'true';
                 const tax = taxable ? price * TAX_RATE : 0;
                 const exFactPrice = price + tax;
-                const partId = (Date.now() + index).toString();
+                const partId = doc(collection(db, 'parts')).id;
 
                 const newPartData: Omit<Part, 'id'> = {
                     name: name,
@@ -298,9 +319,9 @@ export default function InventoryPage() {
 
           toast({
             title: "Import Successful",
-            description: `Successfully imported ${importedCount} parts.`,
+            description: `Successfully imported ${importedCount} parts. This does not create a Tax Invoice record.`,
           });
-          fetchParts();
+          fetchData();
         } catch (error) {
            console.error("Error importing CSV:", error);
            toast({
@@ -328,7 +349,7 @@ export default function InventoryPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-semibold">Inventory</h1>
+        <h1 className="text-2xl font-semibold">Inventory - Incoming Stock</h1>
         <div className="flex gap-2">
             <input 
                 type="file" 
@@ -338,10 +359,10 @@ export default function InventoryPage() {
                 onChange={handleFileChange}
             />
             <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isSaving}>
-                <Upload className="mr-2 h-4 w-4" /> Import CSV
+                <Upload className="mr-2 h-4 w-4" /> Import Parts CSV
             </Button>
-            <Button variant="outline" onClick={handleExport} disabled={parts.length === 0}>
-                <Download className="mr-2 h-4 w-4" /> Export to CSV
+            <Button variant="outline" onClick={handleExport} disabled={taxInvoices.length === 0}>
+                <Download className="mr-2 h-4 w-4" /> Export Invoices CSV
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
@@ -390,7 +411,7 @@ export default function InventoryPage() {
                                                 ) : (
                                                     <Combobox
                                                         options={partOptions}
-                                                        value={field.partId}
+                                                        value={currentItem.partId}
                                                         onChange={(value) => handlePartSelection(index, value)}
                                                         placeholder="Select a part..."
                                                         searchPlaceholder="Search parts..."
@@ -402,7 +423,7 @@ export default function InventoryPage() {
                                                 <Input placeholder="Part Number" {...form.register(`items.${index}.partNumber`)} disabled={!currentItem.isNew} />
                                             </TableCell>
                                             <TableCell>
-                                                <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} disabled={!currentItem.isNew} />
+                                                <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} />
                                             </TableCell>
                                             <TableCell>
                                                 <Input type="number" {...form.register(`items.${index}.quantity`)} />
@@ -418,18 +439,22 @@ export default function InventoryPage() {
                             </TableBody>
                         </Table>
                     </div>
-                     <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="mt-4"
-                        onClick={addNewItem}
-                        >
-                        <PlusCircle className="mr-2 h-4 w-4" />
-                        Add Item
-                    </Button>
+                     <div className="flex justify-between items-center mt-4">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={addNewItem}
+                            >
+                            <PlusCircle className="mr-2 h-4 w-4" />
+                            Add Item
+                        </Button>
+                        <div className="text-right font-semibold">
+                            Total Invoice Amount: GH₵{totalAmount.toFixed(2)}
+                        </div>
+                    </div>
                 </form>
-                <DialogFooter>
+                <DialogFooter className="mt-4">
                     <Button variant="outline" onClick={() => { setIsDialogOpen(false); form.reset(); }}>Cancel</Button>
                     <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
                         {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -442,9 +467,9 @@ export default function InventoryPage() {
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>Product List</CardTitle>
+          <CardTitle>Received Goods (Tax Invoices)</CardTitle>
           <CardDescription>
-            View and manage all your products.
+            A history of all stock received from suppliers.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -452,33 +477,39 @@ export default function InventoryPage() {
             <div className="flex justify-center items-center h-64">
               <Loader2 className="h-12 w-12 animate-spin text-primary" />
             </div>
-          ) : (
+          ) : taxInvoices.length > 0 ? (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Product Name</TableHead>
-                  <TableHead>Part Number</TableHead>
-                  <TableHead className="text-right">Stock</TableHead>
-                  <TableHead className="text-right">Ex. Factory Price</TableHead>
+                  <TableHead>Invoice ID</TableHead>
+                  <TableHead>Supplier</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead className="text-right">Total Amount</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {parts.map((part) => (
-                  <TableRow key={part.id}>
-                    <TableCell className="font-medium">{part.name}</TableCell>
-                    <TableCell>{part.partNumber}</TableCell>
-                    <TableCell className="text-right">{part.stock}</TableCell>
+                {taxInvoices.map((invoice) => (
+                  <TableRow key={invoice.id}>
+                    <TableCell className="font-medium">{invoice.invoiceId}</TableCell>
+                    <TableCell>{invoice.supplierName}</TableCell>
+                    <TableCell>{invoice.date.toDate().toLocaleDateString()}</TableCell>
                     <TableCell className="text-right">
-                      GH₵{part.exFactPrice.toFixed(2)}
+                      GH₵{invoice.totalAmount.toFixed(2)}
                     </TableCell>
                     <TableCell>
-                      {/* Action buttons (like Edit, Delete) can go here */}
+                       <Button variant="ghost" size="icon">
+                            <Eye className="h-4 w-4" />
+                       </Button>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+          ) : (
+             <div className="text-center py-10">
+                <p className="text-muted-foreground">No tax invoices have been recorded yet.</p>
+             </div>
           )}
         </CardContent>
       </Card>

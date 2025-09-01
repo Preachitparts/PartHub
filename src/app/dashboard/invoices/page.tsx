@@ -68,6 +68,8 @@ export default function InvoicesPage() {
 
     const handleDownloadPdf = (invoice: Invoice) => {
         const doc = new jsPDF() as jsPDFWithAutoTable;
+        const pageHeight = doc.internal.pageSize.height || doc.internal.pageSize.getHeight();
+        let yPos = 0;
         
         // Header
         doc.setFontSize(22);
@@ -85,13 +87,28 @@ export default function InvoicesPage() {
         doc.text("www.preachitpartsandequipment.com", 140, 38);
 
         // Customer Info
+        yPos = 45;
         doc.setFontSize(10);
         doc.setFont('helvetica', 'bold');
-        doc.text("Bill To:", 14, 45);
+        doc.text("Bill To:", 14, yPos);
+        
+        yPos += 6;
         doc.setFont('helvetica', 'normal');
-        doc.text(invoice.customerName, 14, 51);
-        doc.text(invoice.customerAddress || '', 14, 56);
-        doc.text(invoice.customerPhone || '', 14, 61);
+        doc.text(invoice.customerName, 14, yPos);
+        
+        // Handle multi-line address
+        if (invoice.customerAddress) {
+            yPos += 5;
+            const addressLines = doc.splitTextToSize(invoice.customerAddress, 80); // 80 is max width
+            doc.text(addressLines, 14, yPos);
+            yPos += (addressLines.length * 4); // Adjust Y based on number of lines
+        }
+
+        if (invoice.customerPhone) {
+            yPos += 5;
+            doc.text(invoice.customerPhone, 14, yPos);
+        }
+        
 
         // Invoice Details
         doc.setFont('helvetica', 'bold');
@@ -121,7 +138,7 @@ export default function InvoicesPage() {
         doc.autoTable({
             head: [tableColumn],
             body: tableRows,
-            startY: 70,
+            startY: 75, // Start table lower to give space for address
             headStyles: { fillColor: [41, 128, 185] },
             styles: { fontSize: 9 },
         });
@@ -138,7 +155,7 @@ export default function InvoicesPage() {
 
         // Footer
         doc.setFontSize(8);
-        doc.text("Thank you for your business!", 14, doc.internal.pageSize.height - 10);
+        doc.text("Thank you for your business!", 14, pageHeight - 10);
 
         doc.save(`Invoice-${invoice.invoiceNumber}.pdf`);
         toast({ title: "Download Started", description: "Your invoice PDF is being downloaded." });
@@ -214,7 +231,7 @@ export default function InvoicesPage() {
                                                 </TooltipProvider>
                                                  <Button variant="ghost" size="icon" onClick={() => handleDownloadPdf(invoice)}>
                                                     <Download className="h-4 w-4" />
-                                                </Button>
+                                                 </Button>
                                             </TableCell>
                                         </TableRow>
                                     )

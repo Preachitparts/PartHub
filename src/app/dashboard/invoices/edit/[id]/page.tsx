@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
@@ -202,34 +203,40 @@ export default function EditInvoicePage() {
       try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-            const freshInvoiceDoc = await transaction.get(invoiceRef);
-            if (!freshInvoiceDoc.exists()) throw new Error("Invoice not found.");
-
-            const currentInvoiceData = freshInvoiceDoc.data() as Invoice;
-            const originalItem = currentInvoiceData.items.find(i => i.partId === itemToSave.partId);
-            const isNewItem = !originalItem;
-
-            // Revert stock if it's an existing item
-            if (originalItem) {
-                const partToRevertRef = doc(db, "parts", originalItem.partId);
-                transaction.update(partToRevertRef, { stock: increment(originalItem.quantity) });
-            }
-
-            // Check stock for the item being saved
             const partRef = doc(db, "parts", itemToSave.partId);
+
+            // --- READ PHASE ---
+            const invoiceDoc = await transaction.get(invoiceRef);
+            if (!invoiceDoc.exists()) throw new Error("Invoice not found.");
+            
             const partDoc = await transaction.get(partRef);
             if (!partDoc.exists()) throw new Error(`Part ${itemToSave.partName} not found.`);
-            const currentStock = partDoc.data().stock;
+            // --- END READ PHASE ---
 
-            if (currentStock < itemToSave.quantity) {
-                // If stock is not enough, we must not commit the transaction.
-                // We need to roll back the reverted stock if we reverted it.
-                // The easiest way is to just throw an error, which Firestore transactions handle automatically.
-                throw new Error(`Not enough stock for ${itemToSave.partName}. Available: ${currentStock}, Requested: ${itemToSave.quantity}`);
+            
+            // --- WRITE PHASE ---
+            const currentInvoiceData = invoiceDoc.data() as Invoice;
+            const originalItem = currentInvoiceData.items.find(i => i.partId === itemToSave.partId);
+            const isNewItem = !originalItem;
+            let currentStock = partDoc.data().stock;
+
+            let stockAdjustment = 0;
+            // If item existed, add its quantity back to stock before calculating new requirement
+            if (originalItem) {
+                stockAdjustment += originalItem.quantity;
+            }
+            
+            // Now check if there is enough stock for the new/updated quantity
+            const availableStock = currentStock + stockAdjustment;
+            if (availableStock < itemToSave.quantity) {
+                throw new Error(`Not enough stock for ${itemToSave.partName}. Available: ${availableStock}, Requested: ${itemToSave.quantity}`);
             }
 
-            // Decrement new stock
-            transaction.update(partRef, { stock: increment(-itemToSave.quantity) });
+            // Decrement stock by the new quantity
+            stockAdjustment -= itemToSave.quantity;
+
+            // Perform the stock update
+            transaction.update(partRef, { stock: increment(stockAdjustment) });
 
             // Update items array in invoice
             let updatedItems: InvoiceItem[];
@@ -257,6 +264,7 @@ export default function EditInvoicePage() {
                 status: newStatus,
                 updatedAt: serverTimestamp()
             });
+             // --- END WRITE PHASE ---
         });
 
         toast({ title: "Item Saved", description: `${itemToSave.partName} has been saved.` });

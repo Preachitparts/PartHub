@@ -32,11 +32,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlusCircle, Loader2, Upload, Download, Trash2, Eye } from "lucide-react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
-import type { Part, TaxInvoice } from "@/types";
+import type { Part, TaxInvoice, TaxInvoiceItem } from "@/types";
 import Papa from "papaparse";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 
@@ -159,13 +159,20 @@ export default function InventoryPage() {
 
   async function onSubmit(data: TaxInvoiceFormValues) {
     setIsSaving(true);
-    const partsBatch = writeBatch(db);
+    const batch = writeBatch(db);
     try {
-        const newPartsData: Omit<Part, 'id'>[] = [];
-        
+        const invoiceId = `SUP-${Date.now().toString().slice(-8)}`;
+        const invoiceRef = doc(db, "taxInvoices", invoiceId);
+
+        const invoiceItems: TaxInvoiceItem[] = [];
+
         for (const item of data.items) {
+            let partId = item.partId;
+
             if (item.isNew) {
-                // Prepare to add a brand new part to the inventory
+                const newPartRef = doc(collection(db, 'parts'));
+                partId = newPartRef.id;
+
                 const tax = item.price * TAX_RATE;
                 const exFactPrice = item.price + tax;
 
@@ -184,33 +191,34 @@ export default function InventoryPage() {
                     equipmentModel: '',
                     imageUrl: "https://placehold.co/600x400",
                 };
-
-                const partId = doc(collection(db, "parts")).id;
+                batch.set(newPartRef, newPartData);
+            } else if (partId) {
                 const partRef = doc(db, "parts", partId);
-                partsBatch.set(partRef, newPartData);
-            } else if (item.partId) {
-                // Update stock for an existing part
-                const partRef = doc(db, "parts", item.partId);
-                partsBatch.update(partRef, {
-                    stock: increment(item.quantity)
-                });
+                batch.update(partRef, { stock: increment(item.quantity) });
             }
+
+            invoiceItems.push({
+                partId: partId,
+                name: item.name,
+                partNumber: item.partNumber,
+                price: item.price,
+                quantity: item.quantity,
+                isNew: item.isNew
+            });
         }
       
-        await partsBatch.commit();
-        
-        // Now create the Tax Invoice document
-        const invoiceId = `SUP-${Date.now().toString().slice(-8)}`;
         const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
             invoiceId,
             supplierName: data.supplierName,
             supplierInvoiceNumber: data.invoiceNumber || '',
             date: Timestamp.now(),
             totalAmount,
-            items: data.items.map(i => ({...i})), // ensure plain objects
+            items: invoiceItems,
         };
 
-        await setDoc(doc(db, "taxInvoices", invoiceId), newTaxInvoice);
+        batch.set(invoiceRef, newTaxInvoice);
+        
+        await batch.commit();
       
         toast({
             title: "Inventory Updated",
@@ -258,8 +266,6 @@ export default function InventoryPage() {
   };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    // This is now more complex as we import parts, not invoices.
-    // Keeping part import functionality as requested earlier.
     const file = event.target.files?.[0];
     if (file) {
       parseCsv(file);
@@ -273,26 +279,28 @@ export default function InventoryPage() {
       complete: async (results) => {
         setIsSaving(true);
         try {
-          const importedParts = results.data as any[];
-          if(importedParts.length === 0) {
+          const importedData = results.data as any[];
+          if (importedData.length === 0) {
             toast({ variant: "destructive", title: "Import Error", description: "CSV file is empty or invalid." });
             return;
           }
 
           const batch = writeBatch(db);
-          let importedCount = 0;
+          const invoiceItems: TaxInvoiceItem[] = [];
+          let totalInvoiceAmount = 0;
           
-          importedParts.forEach((row, index) => {
+          importedData.forEach((row) => {
              const partNumber = row['Part Number'] || row['PartNumber'] || row['partNumber'];
              const name = row['Description'] || row['Name'] || row['name'];
-             const stock = parseInt(row['Quantity'] || row['Stock'] || row['stock'] || '0', 10);
+             const quantity = parseInt(row['Quantity'] || row['Stock'] || row['stock'] || '0', 10);
+             const price = parseFloat(row['Price'] || row['price'] || '0');
              
-             if(partNumber && name) {
-                const price = parseFloat(row['Price'] || row['price'] || '0');
+             if(partNumber && name && quantity > 0 && price >= 0) {
+                const partId = doc(collection(db, 'parts')).id;
+                const partRef = doc(db, "parts", partId);
                 const taxable = (row['Taxable'] || row['taxable'] || 'true').toLowerCase() === 'true';
                 const tax = taxable ? price * TAX_RATE : 0;
                 const exFactPrice = price + tax;
-                const partId = doc(collection(db, 'parts')).id;
 
                 const newPartData: Omit<Part, 'id'> = {
                     name: name,
@@ -300,7 +308,7 @@ export default function InventoryPage() {
                     partCode: row['Part Code'] || row['PartCode'] || row['partCode'] || partNumber,
                     description: row['Description'] || name,
                     price: price,
-                    stock: stock,
+                    stock: quantity,
                     taxable: taxable,
                     tax: tax,
                     exFactPrice: exFactPrice,
@@ -310,17 +318,42 @@ export default function InventoryPage() {
                     imageUrl: row['Image URL'] || row['ImageURL'] || row['imageUrl'] || "https://placehold.co/600x400",
                 };
 
-                const partRef = doc(db, "parts", partId);
                 batch.set(partRef, newPartData);
-                importedCount++;
+
+                invoiceItems.push({
+                    partId: partId,
+                    name: name,
+                    partNumber: partNumber,
+                    price: price,
+                    quantity: quantity,
+                    isNew: true,
+                });
+
+                totalInvoiceAmount += price * quantity;
              }
           });
           
+          if (invoiceItems.length > 0) {
+            const invoiceId = `SUP-${Date.now().toString().slice(-8)}`;
+            const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
+                invoiceId,
+                supplierName: "CSV Import",
+                supplierInvoiceNumber: file.name,
+                date: Timestamp.now(),
+                totalAmount: totalInvoiceAmount,
+                items: invoiceItems,
+            };
+            const invoiceRef = doc(db, "taxInvoices", invoiceId);
+            batch.set(invoiceRef, newTaxInvoice);
+          } else {
+             throw new Error("No valid rows found in CSV to import.");
+          }
+
           await batch.commit();
 
           toast({
             title: "Import Successful",
-            description: `Successfully imported ${importedCount} parts. This does not create a Tax Invoice record.`,
+            description: `Successfully imported ${invoiceItems.length} parts and created a new Tax Invoice.`,
           });
           fetchData();
         } catch (error) {
@@ -517,3 +550,5 @@ export default function InventoryPage() {
     </div>
   );
 }
+
+    

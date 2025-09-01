@@ -5,10 +5,10 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, orderBy, query, getDoc, updateDoc } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, serverTimestamp, orderBy, query, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter, useParams } from "next/navigation";
-import type { Part, Invoice, Customer, InvoiceItem } from "@/types";
+import type { Part, Invoice, Customer } from "@/types";
 import { logActivity } from "@/lib/activity-log";
 
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,6 @@ import {
   Save,
   Trash2,
   ArrowLeft,
-  UserPlus,
 } from "lucide-react";
 import Link from "next/link";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
@@ -218,11 +217,13 @@ export default function EditInvoicePage() {
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-            const invoiceDoc = await transaction.get(invoiceRef);
-            if (!invoiceDoc.exists()) {
+            
+            // Re-fetch the invoice inside the transaction to get the latest state
+            const freshInvoiceDoc = await transaction.get(invoiceRef);
+            if (!freshInvoiceDoc.exists()) {
                 throw new Error("Invoice does not exist anymore.");
             }
-            const currentDbInvoice = invoiceDoc.data() as Invoice;
+            const currentDbInvoice = freshInvoiceDoc.data() as Invoice;
 
             const stockAdjustments = new Map<string, number>();
 
@@ -238,19 +239,21 @@ export default function EditInvoicePage() {
 
             // Read all parts and check stock
             for (const [partId, adjustment] of stockAdjustments.entries()) {
-                if (adjustment > 0) continue; // Only check for decrements
+                if (adjustment === 0) continue;
                 const partRef = doc(db, "parts", partId);
                 const partDoc = await transaction.get(partRef);
                 if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
                 
                 const currentStock = partDoc.data().stock;
-                if (currentStock + adjustment < 0) {
+                // Only check for stock if we are decrementing it (adjustment is negative)
+                if (adjustment < 0 && currentStock < -adjustment) {
                      throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required: ${-adjustment}`);
                 }
             }
             
             // Apply all stock updates
             for (const [partId, adjustment] of stockAdjustments.entries()) {
+                 if(adjustment === 0) continue;
                  const partRef = doc(db, "parts", partId);
                  transaction.update(partRef, { stock: increment(adjustment) });
             }

@@ -153,22 +153,24 @@ export default function CustomersPage() {
                 collection(db, "invoices"),
                 where("customerId", "==", selectedCustomer.id),
                 where("balanceDue", ">", 0),
-                orderBy("balanceDue"),
-                orderBy("invoiceDate")
+                orderBy("balanceDue", "asc"),
+                orderBy("invoiceDate", "asc")
             );
 
             const unpaidInvoicesSnapshot = await getDocs(customerInvoicesQuery);
-            const unpaidInvoices = unpaidInvoicesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
 
-            for (const invoice of unpaidInvoices) {
+            for (const invoiceDoc of unpaidInvoicesSnapshot.docs) {
                 if (amountToDistribute <= 0) break;
                 
-                const invoiceRef = doc(db, "invoices", invoice.id);
-                const paymentAmount = Math.min(amountToDistribute, invoice.balanceDue);
+                const invoiceRef = doc(db, "invoices", invoiceDoc.id);
+                const invoiceData = invoiceDoc.data() as Invoice;
+                const balanceDue = invoiceData.balanceDue || 0;
+
+                const paymentAmount = Math.min(amountToDistribute, balanceDue);
                 
-                const newPaidAmount = invoice.paidAmount + paymentAmount;
-                const newBalanceDue = invoice.balanceDue - paymentAmount;
-                const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+                const newPaidAmount = (invoiceData.paidAmount || 0) + paymentAmount;
+                const newBalanceDue = balanceDue - paymentAmount;
+                const newStatus = newBalanceDue <= 0 ? 'Paid' : invoiceData.status;
 
                 transaction.update(invoiceRef, {
                     paidAmount: newPaidAmount,
@@ -183,6 +185,7 @@ export default function CustomersPage() {
                 // If there's still money left over, it's an overpayment or credit.
                 // For now, we'll just log it. A future feature could be a customer credit system.
                 console.log(`Overpayment of GHS ${amountToDistribute.toFixed(2)} for ${selectedCustomer.name}`);
+                await logActivity(`Overpayment of GHS ${amountToDistribute.toFixed(2)} recorded for ${selectedCustomer.name}`);
             }
         });
         
@@ -299,11 +302,11 @@ export default function CustomersPage() {
                     <TableCell className="font-medium">{customer.name}</TableCell>
                     <TableCell>{customer.phone || "N/A"}</TableCell>
                     <TableCell>{customer.address || "N/A"}</TableCell>
-                    <TableCell className={`text-right font-bold ${customer.balance > 0 ? 'text-destructive' : ''}`}>
-                      GHS {customer.balance.toFixed(2)}
+                    <TableCell className={`text-right font-bold ${(customer.balance || 0) > 0 ? 'text-destructive' : ''}`}>
+                      GHS {(customer.balance || 0).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-center">
-                       <Button variant="outline" size="sm" onClick={() => handleOpenPaymentDialog(customer)} disabled={customer.balance <= 0}>
+                       <Button variant="outline" size="sm" onClick={() => handleOpenPaymentDialog(customer)} disabled={(customer.balance || 0) <= 0}>
                             <CreditCard className="mr-2 h-4 w-4" />
                             Record Payment
                        </Button>

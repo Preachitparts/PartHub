@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, query, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { Part, Invoice, Customer } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,6 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { logActivity } from "@/lib/activity-log";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useForm } from "react-hook-form";
@@ -94,7 +93,7 @@ export default function POSPage() {
         );
         setParts(partsList);
 
-        const customersCollection = collection(db, "customers");
+        const customersCollection = query(collection(db, "customers"), orderBy("name"));
         const customersSnapshot = await getDocs(customersCollection);
         const customersList = customersSnapshot.docs.map(
           (doc) => ({ ...doc.data(), id: doc.id } as Customer)
@@ -264,7 +263,8 @@ export default function POSPage() {
             }
 
             const invoiceRef = doc(db, "invoices", invoiceNumber);
-            const status = balanceDue <= 0 ? 'Paid' : 'Unpaid';
+            const finalBalanceDue = total - paidAmount;
+            const status = finalBalanceDue <= 0 ? 'Paid' : 'Unpaid';
             const invoiceToSave: Omit<Invoice, 'id'> = {
                 invoiceNumber: invoiceNumber,
                 customerId: selectedCustomer.id,
@@ -283,7 +283,7 @@ export default function POSPage() {
                 tax: taxAmount,
                 total: total,
                 paidAmount: paidAmount,
-                balanceDue: balanceDue,
+                balanceDue: finalBalanceDue,
             };
             transaction.set(invoiceRef, invoiceToSave);
         });

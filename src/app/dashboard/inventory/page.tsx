@@ -264,33 +264,31 @@ export default function InventoryPage() {
         if (!invoiceDoc.exists()) {
             throw new Error("Invoice not found.");
         }
-
+        
         const originalInvoice = invoiceDoc.data() as TaxInvoice;
-        const originalItemsMap = new Map(originalInvoice.items.map(item => [item.partId, item]));
-        const updatedItems = data.items;
-
         const stockAdjustments = new Map<string, number>();
 
-        // For original items, find their new quantity or assume 0 if removed
-        originalInvoice.items.forEach(origItem => {
-            if (origItem.partId) {
-                const updatedItem = updatedItems.find(updItem => updItem.partId === origItem.partId);
-                const newQuantity = updatedItem ? updatedItem.quantity : 0;
-                const adjustment = newQuantity - origItem.quantity;
-                stockAdjustments.set(origItem.partId, (stockAdjustments.get(origItem.partId) || 0) + adjustment);
-            }
-        });
+        // Create maps for easy lookup
+        const originalItemsMap = new Map(originalInvoice.items.map(item => [item.partId, item.quantity]));
+        const updatedItemsMap = new Map(data.items.map(item => [item.partId, item]));
 
-        // For new items in the updated list (that were not in original)
-        for (const item of updatedItems) {
-            if (item.partId && !originalItemsMap.has(item.partId) && !item.isNew) {
-                 stockAdjustments.set(item.partId, (stockAdjustments.get(item.partId) || 0) + item.quantity);
+        // Calculate stock adjustments for existing parts
+        const allPartIds = new Set([...originalItemsMap.keys(), ...updatedItemsMap.keys()]);
+        
+        for (const partId of allPartIds) {
+            if (!partId) continue;
+            const originalQty = originalItemsMap.get(partId) || 0;
+            const updatedQty = updatedItemsMap.get(partId)?.quantity || 0;
+            const adjustment = updatedQty - originalQty;
+
+            if (adjustment !== 0) {
+                 stockAdjustments.set(partId, adjustment);
             }
         }
         
         // Handle parts that are completely new (not in DB yet)
-        for (const item of updatedItems) {
-            if (item.isNew) {
+        for (const item of data.items) {
+            if (item.isNew && !item.partId) { // Ensure it's a truly new item
                 const newPartRef = doc(collection(db, 'parts'));
                 item.partId = newPartRef.id; // Assign a new ID so it can be updated
                 const tax = item.price * TAX_RATE;
@@ -301,20 +299,23 @@ export default function InventoryPage() {
                     tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
                 };
                 transaction.set(newPartRef, newPartData);
+                // The stock for this new part is set directly, no adjustment needed.
             }
         }
         
-        // Apply all calculated stock adjustments
+        // Apply all calculated stock adjustments for existing parts
         for (const [partId, adjustment] of stockAdjustments.entries()) {
-            if (adjustment !== 0) {
-                const partRef = doc(db, "parts", partId);
-                transaction.update(partRef, { stock: increment(adjustment) });
-            }
+            const partRef = doc(db, "parts", partId);
+            transaction.update(partRef, { stock: increment(adjustment) });
         }
 
         // Update the invoice document itself
         const finalUpdatedItems = data.items.map(item => ({
-            ...item,
+            partId: item.partId,
+            name: item.name,
+            partNumber: item.partNumber,
+            price: item.price,
+            quantity: item.quantity,
             isNew: false // Mark all items as not new after saving
         }));
 
@@ -325,6 +326,7 @@ export default function InventoryPage() {
             supplierInvoiceNumber: data.invoiceNumber || '',
             totalAmount: currentTotalAmount,
             items: finalUpdatedItems,
+            date: Timestamp.now(), // Update the date to reflect the edit
         };
         transaction.update(invoiceRef, updatedInvoiceData);
     });
@@ -455,13 +457,13 @@ export default function InventoryPage() {
             title: "Import Successful",
             description: `Successfully imported ${invoiceItems.length} parts and created a new Tax Invoice.`,
           });
-          fetchData(); // This was the missing piece
-        } catch (error) {
+          fetchData();
+        } catch (error: any) {
            console.error("Error importing CSV:", error);
            toast({
               variant: "destructive",
               title: "Import Failed",
-              description: "Could not import parts from CSV. Please check the file format and console for errors.",
+              description: error.message || "Could not import parts from CSV. Please check the file format and console for errors.",
            });
         } finally {
             setIsSaving(false);
@@ -560,10 +562,10 @@ export default function InventoryPage() {
                                               <Input placeholder="Part Number" {...form.register(`items.${index}.partNumber`)} disabled={!currentItem.isNew} />
                                           </TableCell>
                                           <TableCell>
-                                              <Input type="number" step="0.01" {...form.register(`items.${index}.price`, { valueAsNumber: true })} />
+                                              <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} />
                                           </TableCell>
                                           <TableCell>
-                                              <Input type="number" {...form.register(`items.${index}.quantity`, { valueAsNumber: true })} />
+                                              <Input type="number" {...form.register(`items.${index}.quantity`)} />
                                           </TableCell>
                                           <TableCell>
                                               <Button variant="ghost" size="icon" onClick={() => remove(index)}>
@@ -723,3 +725,5 @@ export default function InventoryPage() {
     </div>
   );
 }
+
+    

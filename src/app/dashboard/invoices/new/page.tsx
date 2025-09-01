@@ -53,6 +53,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import Link from "next/link";
+import { Combobox } from "@/components/ui/combobox";
 
 const invoiceItemSchema = z.object({
   partId: z.string().min(1, "Please select a part."),
@@ -204,6 +205,13 @@ export default function NewInvoicePage() {
     }
   }
 
+  const partOptions = useMemo(() => {
+    return parts.map(part => ({
+        value: part.id,
+        label: `${part.name} (${part.partNumber})`
+    }));
+  }, [parts]);
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -317,21 +325,19 @@ export default function NewInvoicePage() {
                             name={`items.${index}.partId`}
                             render={({ field }) => (
                             <FormItem>
-                                <Select onValueChange={(value) => {
-                                    field.onChange(value);
-                                    handlePartChange(index, value)
-                                }} defaultValue={field.value}>
                                 <FormControl>
-                                    <SelectTrigger>
-                                    <SelectValue placeholder="Select a part" />
-                                    </SelectTrigger>
+                                    <Combobox
+                                        options={partOptions}
+                                        value={field.value}
+                                        onChange={(value) => {
+                                            field.onChange(value);
+                                            handlePartChange(index, value);
+                                        }}
+                                        placeholder="Select a part..."
+                                        searchPlaceholder="Search by name or part number..."
+                                        emptyPlaceholder="No parts found."
+                                    />
                                 </FormControl>
-                                <SelectContent>
-                                    {parts.map(part => (
-                                        <SelectItem key={part.id} value={part.id}>{part.name} ({part.partNumber})</SelectItem>
-                                    ))}
-                                </SelectContent>
-                                </Select>
                                 <FormMessage />
                             </FormItem>
                             )}
@@ -394,4 +400,3 @@ export default function NewInvoicePage() {
     </Form>
   );
 }
-

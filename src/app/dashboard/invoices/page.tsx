@@ -2,22 +2,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, query, orderBy } from "firebase/firestore";
+import { collection, getDocs, query, orderBy, writeBatch, doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
-import { PlusCircle, Loader2, Eye, Pencil, Download, AlertCircle } from "lucide-react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { PlusCircle, Loader2, Eye, Pencil, Download, AlertCircle, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useToast } from "@/hooks/use-toast";
-import type { Invoice } from "@/types";
+import type { Invoice, Part } from "@/types";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
+import { logActivity } from "@/lib/activity-log";
 
 
 // Extend jsPDF with autoTable method
@@ -29,53 +32,116 @@ interface jsPDFWithAutoTable extends jsPDF {
 export default function InvoicesPage() {
     const [invoices, setInvoices] = useState<Invoice[]>([]);
     const [loading, setLoading] = useState(true);
+    const [isDeleting, setIsDeleting] = useState(false);
     const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
     const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+    const [selectedInvoices, setSelectedInvoices] = useState<string[]>([]);
     const { toast } = useToast();
 
+    const fetchInvoices = async () => {
+        setLoading(true);
+        try {
+            const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "desc"));
+            const querySnapshot = await getDocs(invoicesQuery);
+            const invoicesList = querySnapshot.docs.map(doc => {
+                const data = doc.data();
+                const dueDate = new Date(data.dueDate);
+                const today = new Date();
+                today.setHours(0,0,0,0); // Compare dates only
+                
+                let status = data.status;
+                if (status === 'Unpaid' && dueDate < today) {
+                    status = 'Overdue';
+                }
+
+                return {
+                    id: doc.id,
+                    ...data,
+                    status: status, // Use the derived status
+                    invoiceDateObject: new Date(data.invoiceDate),
+                } as Invoice & { invoiceDateObject: Date };
+            });
+            setInvoices(invoicesList);
+        } catch (error) {
+            console.error("Error fetching invoices: ", error);
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: "Could not fetch invoices.",
+            });
+        } finally {
+            setLoading(false);
+        }
+    };
+
     useEffect(() => {
-        const fetchInvoices = async () => {
-            setLoading(true);
-            try {
-                const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "desc"));
-                const querySnapshot = await getDocs(invoicesQuery);
-                const invoicesList = querySnapshot.docs.map(doc => {
-                    const data = doc.data();
-                    const dueDate = new Date(data.dueDate);
-                    const today = new Date();
-                    today.setHours(0,0,0,0); // Compare dates only
-                    
-                    let status = data.status;
-                    if (status === 'Unpaid' && dueDate < today) {
-                        status = 'Overdue';
-                    }
-
-                    return {
-                        id: doc.id,
-                        ...data,
-                        status: status, // Use the derived status
-                        invoiceDateObject: new Date(data.invoiceDate),
-                    } as Invoice & { invoiceDateObject: Date };
-                });
-                setInvoices(invoicesList);
-            } catch (error) {
-                console.error("Error fetching invoices: ", error);
-                toast({
-                    variant: "destructive",
-                    title: "Error",
-                    description: "Could not fetch invoices.",
-                });
-            } finally {
-                setLoading(false);
-            }
-        };
-
         fetchInvoices();
-    }, [toast]);
+    }, []);
 
     const handleViewInvoice = (invoice: Invoice) => {
         setSelectedInvoice(invoice);
         setIsViewDialogOpen(true);
+    };
+
+    const handleDeleteInvoices = async () => {
+        if (selectedInvoices.length === 0) return;
+        setIsDeleting(true);
+
+        try {
+            const batch = writeBatch(db);
+            const partsToUpdate: { [partId: string]: number } = {};
+
+            // First, read all necessary documents
+            for (const invoiceId of selectedInvoices) {
+                const invoiceRef = doc(db, "invoices", invoiceId);
+                const invoiceDoc = await getDoc(invoiceRef);
+
+                if (invoiceDoc.exists()) {
+                    const invoiceData = invoiceDoc.data() as Invoice;
+                    // Aggregate stock changes
+                    invoiceData.items.forEach(item => {
+                        partsToUpdate[item.partId] = (partsToUpdate[item.partId] || 0) + item.quantity;
+                    });
+                    // Mark invoice for deletion
+                    batch.delete(invoiceRef);
+                }
+            }
+            
+            // Now, get all part documents that need updating
+            const partIds = Object.keys(partsToUpdate);
+            const partRefs = partIds.map(id => doc(db, "parts", id));
+            const partDocs = await Promise.all(partRefs.map(ref => getDoc(ref)));
+
+            partDocs.forEach((partDoc, index) => {
+                if (partDoc.exists()) {
+                    const partRef = partRefs[index];
+                    const currentStock = (partDoc.data() as Part).stock;
+                    const stockToAdd = partsToUpdate[partDoc.id];
+                    batch.update(partRef, { stock: currentStock + stockToAdd });
+                }
+            });
+
+            await batch.commit();
+
+            toast({
+                title: "Invoices Deleted",
+                description: `${selectedInvoices.length} invoice(s) have been successfully deleted and stock has been restored.`,
+            });
+            await logActivity(`Deleted ${selectedInvoices.length} invoice(s).`);
+
+            fetchInvoices(); // Refresh the data
+            setSelectedInvoices([]); // Clear selection
+            
+        } catch (error) {
+            console.error("Error deleting invoices: ", error);
+            toast({
+                variant: "destructive",
+                title: "Deletion Failed",
+                description: "Could not delete invoices. Please try again.",
+            });
+        } finally {
+            setIsDeleting(false);
+        }
     };
 
     const handleDownloadPdf = (invoice: Invoice) => {
@@ -189,15 +255,55 @@ export default function InvoicesPage() {
         return hoursDifference <= 72;
     };
 
+    const handleSelectAll = (checked: boolean) => {
+        if (checked) {
+            setSelectedInvoices(invoices.map(inv => inv.id));
+        } else {
+            setSelectedInvoices([]);
+        }
+    };
+
+    const handleSelectSingle = (invoiceId: string, checked: boolean) => {
+        if (checked) {
+            setSelectedInvoices(prev => [...prev, invoiceId]);
+        } else {
+            setSelectedInvoices(prev => prev.filter(id => id !== invoiceId));
+        }
+    };
+
     return (
         <div className="flex flex-col gap-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-semibold">Invoices</h1>
-                <Button asChild>
-                    <Link href="/dashboard/invoices/new">
-                        <PlusCircle className="mr-2 h-4 w-4" /> Create Invoice
-                    </Link>
-                </Button>
+                <div className="flex items-center gap-2">
+                    {selectedInvoices.length > 0 && (
+                         <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                                <Button variant="destructive" disabled={isDeleting}>
+                                    {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                                    Delete ({selectedInvoices.length})
+                                </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        This action cannot be undone. This will permanently delete the selected invoice(s) and restore the stock quantities for all items on them.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction onClick={handleDeleteInvoices}>Continue</AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
+                    )}
+                    <Button asChild>
+                        <Link href="/dashboard/invoices/new">
+                            <PlusCircle className="mr-2 h-4 w-4" /> Create Invoice
+                        </Link>
+                    </Button>
+                </div>
             </div>
             <Card>
                 <CardHeader>
@@ -213,6 +319,13 @@ export default function InvoicesPage() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
+                                    <TableHead className="w-[50px]">
+                                        <Checkbox 
+                                            checked={selectedInvoices.length > 0 && selectedInvoices.length === invoices.length}
+                                            onCheckedChange={handleSelectAll}
+                                            aria-label="Select all"
+                                        />
+                                    </TableHead>
                                     <TableHead>Invoice #</TableHead>
                                     <TableHead>Customer</TableHead>
                                     <TableHead>Date</TableHead>
@@ -226,7 +339,14 @@ export default function InvoicesPage() {
                                 {invoices.map((invoice) => {
                                     const canEdit = isEditable(invoice as Invoice & { invoiceDateObject: Date });
                                     return (
-                                        <TableRow key={invoice.id}>
+                                        <TableRow key={invoice.id} data-state={selectedInvoices.includes(invoice.id) && "selected"}>
+                                            <TableCell>
+                                                <Checkbox
+                                                    checked={selectedInvoices.includes(invoice.id)}
+                                                    onCheckedChange={(checked) => handleSelectSingle(invoice.id, !!checked)}
+                                                    aria-label={`Select invoice ${invoice.invoiceNumber}`}
+                                                />
+                                            </TableCell>
                                             <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
                                             <TableCell>{invoice.customerName}</TableCell>
                                             <TableCell>{new Date(invoice.invoiceDate).toLocaleDateString()}</TableCell>
@@ -394,5 +514,4 @@ export default function InvoicesPage() {
 
         </div>
     );
-
-    
+}

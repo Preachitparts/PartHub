@@ -86,5 +86,3 @@ export interface ActivityLog {
     description: string;
     date: Timestamp;
 }
-
-    

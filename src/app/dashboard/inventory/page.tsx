@@ -255,7 +255,7 @@ export default function InventoryPage() {
   }
 
   async function updateExistingInvoice(data: TaxInvoiceFormValues) {
-    if (!data.id) throw new Error("Invoice ID is missing.");
+    if (!data.id) throw new Error("Invoice ID is missing for update.");
     const invoiceId = data.id;
 
     try {
@@ -264,38 +264,46 @@ export default function InventoryPage() {
             const invoiceDoc = await transaction.get(invoiceRef);
 
             if (!invoiceDoc.exists()) {
-                throw new Error("Invoice not found.");
+                throw new Error("Invoice not found. It may have been deleted.");
             }
             
-            const originalInvoice = invoiceDoc.data() as TaxInvoice;
+            const originalInvoiceData = invoiceDoc.data() as TaxInvoice;
             const stockAdjustments = new Map<string, number>();
 
-            // Calculate stock adjustments by comparing old and new quantities
-            const originalItemsMap = new Map(originalInvoice.items.map(item => [item.partId, item.quantity]));
-            const updatedItemsData = data.items;
+            // Create a map of original items for easy lookup
+            const originalItemsMap = new Map(originalInvoiceData.items.map(item => [item.partId, item]));
 
+            // Create a map of updated items for easy lookup
+            const updatedItemsMap = new Map(data.items.map(item => [item.partId, item]));
+
+            // Get a set of all unique part IDs from both original and updated items
             const allPartIds = new Set([
-                ...originalInvoice.items.map(i => i.partId),
-                ...updatedItemsData.map(i => i.partId)
+                ...originalInvoiceData.items.map(i => i.partId).filter(id => id),
+                ...data.items.map(i => i.partId).filter(id => id)
             ]);
 
-            for (const partId of allPartIds) {
-                if (!partId) continue;
-                const originalQty = originalItemsMap.get(partId) || 0;
-                const updatedItem = updatedItemsData.find(i => i.partId === partId);
+            // Calculate stock adjustments
+            allPartIds.forEach(partId => {
+                if (!partId) return;
+                const originalItem = originalItemsMap.get(partId);
+                const updatedItem = updatedItemsMap.get(partId);
+
+                const originalQty = originalItem ? originalItem.quantity : 0;
                 const updatedQty = updatedItem ? updatedItem.quantity : 0;
                 
                 const adjustment = updatedQty - originalQty;
                 if (adjustment !== 0) {
-                    stockAdjustments.set(partId, adjustment);
+                    stockAdjustments.set(partId, (stockAdjustments.get(partId) || 0) + adjustment);
                 }
-            }
+            });
 
-            // Process brand new items added during the edit
+            // Handle newly created parts during the edit
             const finalInvoiceItems: TaxInvoiceItem[] = [];
-            for (const item of updatedItemsData) {
-                if (item.isNew && !originalItemsMap.has(item.partId)) {
+            for (const item of data.items) {
+                if (item.isNew && !item.partId) { // It's a new part added in the edit form
                     const newPartRef = doc(collection(db, 'parts'));
+                    const newPartId = newPartRef.id;
+
                     const tax = item.price * TAX_RATE;
                     const exFactPrice = item.price + tax;
                     const newPartData: Omit<Part, 'id'> = {
@@ -304,39 +312,42 @@ export default function InventoryPage() {
                         tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
                     };
                     transaction.set(newPartRef, newPartData);
-                    finalInvoiceItems.push({ ...item, partId: newPartRef.id, isNew: false });
+                    
+                    // Add the new item with its new ID to the final list
+                    finalInvoiceItems.push({ ...item, partId: newPartId, isNew: false });
                 } else {
                     finalInvoiceItems.push({ ...item, isNew: false });
                 }
             }
-
-            // Apply stock adjustments for existing parts
+            
+            // Apply all calculated stock adjustments
             for (const [partId, adjustment] of stockAdjustments.entries()) {
                 const partRef = doc(db, "parts", partId);
                 transaction.update(partRef, { stock: increment(adjustment) });
             }
 
             // Update the invoice document itself
-            const currentTotalAmount = finalInvoiceItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+            const newTotalAmount = finalInvoiceItems.reduce((total, item) => total + (item.price * item.quantity), 0);
             
             const updatedInvoiceData = {
                 supplierName: data.supplierName,
                 supplierInvoiceNumber: data.invoiceNumber || '',
-                totalAmount: currentTotalAmount,
-                items: finalInvoiceItems,
-                date: Timestamp.now(), // Update the date to reflect the edit
+                totalAmount: newTotalAmount,
+                items: finalInvoiceItems, // Use the list that includes newly created parts
+                date: Timestamp.now(), // Update the date to reflect the edit time
             };
             transaction.update(invoiceRef, updatedInvoiceData);
         });
 
         toast({ title: "Invoice Updated", description: `Successfully updated Tax Invoice ${invoiceId}.` });
         setIsFormDialogOpen(false);
-        fetchData();
+        await fetchData(); // Use await to ensure data is fresh before user interaction
     } catch (error) {
         console.error("Failed to update invoice:", error);
-        throw error; // Re-throw to be caught by the onSubmit handler
+        // Re-throw the error so it can be caught by the onSubmit handler and displayed in a toast
+        throw error;
     }
-}
+  }
   
   const addNewItem = () => {
     append({ partId: "", name: "", partNumber: "", price: 0, quantity: 1, isNew: false });
@@ -458,7 +469,7 @@ export default function InventoryPage() {
             title: "Import Successful",
             description: `Successfully imported ${invoiceItems.length} parts and created a new Tax Invoice.`,
           });
-          fetchData();
+          await fetchData();
         } catch (error: any) {
            console.error("Error importing CSV:", error);
            toast({
@@ -726,3 +737,5 @@ export default function InventoryPage() {
     </div>
   );
 }
+
+    

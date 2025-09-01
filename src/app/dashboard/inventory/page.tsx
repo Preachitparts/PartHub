@@ -300,15 +300,16 @@ export default function InventoryPage() {
           const invoiceItems: TaxInvoiceItem[] = [];
           let totalInvoiceAmount = 0;
           
-          importedData.forEach((row) => {
+          for (const row of importedData) {
              const partNumber = row['Part Number'] || row['PartNumber'] || row['partNumber'];
              const name = row['Description'] || row['Name'] || row['name'];
              const quantity = parseInt(row['Quantity'] || row['Stock'] || row['stock'] || '0', 10);
              const price = parseFloat(row['Price'] || row['price'] || '0');
              
              if(partNumber && name && quantity > 0 && price >= 0) {
-                const partId = doc(collection(db, 'parts')).id;
-                const partRef = doc(db, "parts", partId);
+                const partRef = doc(collection(db, 'parts'));
+                const partId = partRef.id;
+
                 const taxable = (row['Taxable'] || row['taxable'] || 'true').toLowerCase() === 'true';
                 const tax = taxable ? price * TAX_RATE : 0;
                 const exFactPrice = price + tax;
@@ -342,10 +343,10 @@ export default function InventoryPage() {
 
                 totalInvoiceAmount += price * quantity;
              }
-          });
+          };
           
           if (invoiceItems.length > 0) {
-            const invoiceId = `SUP-${Date.now().toString().slice(-8)}`;
+            const invoiceId = `SUP-IMPORT-${Date.now().toString().slice(-6)}`;
             const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
                 invoiceId,
                 supplierName: "CSV Import",
@@ -404,7 +405,8 @@ export default function InventoryPage() {
                 onChange={handleFileChange}
             />
             <Button variant="outline" onClick={() => fileInputRef.current?.click()} disabled={isSaving}>
-                <Upload className="mr-2 h-4 w-4" /> Import Parts CSV
+                {isSaving && fileInputRef.current?.files?.length ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                Import Parts CSV
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={taxInvoices.length === 0}>
                 <Download className="mr-2 h-4 w-4" /> Export Invoices CSV

@@ -136,19 +136,22 @@ export default function EditInvoicePage() {
   const watchPaidAmount = invoiceForm.watch("paidAmount");
 
   const { subtotal, taxAmount, total, balanceDue } = useMemo(() => {
-    const subtotal = (watchItems || []).reduce(
+    const currentItems = invoiceForm.getValues("items") || [];
+    const currentPaidAmount = invoiceForm.getValues("paidAmount") || 0;
+
+    const subtotal = currentItems.reduce(
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
     );
-    const taxAmount = (watchItems || []).reduce(
+    const taxAmount = currentItems.reduce(
       (acc, item) => acc + (item.tax || 0) * (item.quantity || 1),
       0
     );
     const total = subtotal + taxAmount;
-    const balanceDueValue = total - (watchPaidAmount || 0);
+    const balanceDueValue = total - currentPaidAmount;
     
     return { subtotal, taxAmount, total, balanceDue: balanceDueValue };
-  }, [watchItems, watchPaidAmount]);
+  }, [watchItems, watchPaidAmount, invoiceForm]);
 
   const handlePartChange = (index: number, partId: string) => {
     const selectedPart = parts.find((p) => p.id === partId);
@@ -202,7 +205,28 @@ export default function EditInvoicePage() {
   
   async function onSubmit(data: InvoiceFormValues) {
     setIsSaving(true);
-    
+
+    const { items: newItems, paidAmount } = invoiceForm.getValues();
+    const newSubtotal = newItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+    const newTax = newItems.reduce((acc, item) => acc + item.tax * item.quantity, 0);
+    const newTotal = newSubtotal + newTax;
+    const newBalanceDue = newTotal - paidAmount;
+    const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+    const selectedCustomer = customers.find(c => c.id === data.customerId);
+
+    const finalInvoiceData = {
+        ...data,
+        customerName: selectedCustomer?.name || '',
+        customerAddress: selectedCustomer?.address || '',
+        customerPhone: selectedCustomer?.phone || '',
+        subtotal: newSubtotal,
+        tax: newTax,
+        total: newTotal,
+        balanceDue: newBalanceDue,
+        status: newStatus,
+        updatedAt: serverTimestamp(),
+    };
+
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
@@ -215,64 +239,38 @@ export default function EditInvoicePage() {
 
             const stockChanges = new Map<string, number>();
 
-            // Calculate stock changes based on the difference between original and new items
+            // Return original items to stock
             originalInvoice.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity); // Return to stock
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
             });
 
-            data.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity); // Take from stock
+            // Decrement new items from stock
+            finalInvoiceData.items.forEach(item => {
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
             });
             
-            // Fetch all parts involved in the transaction to check stock levels
             const partIds = Array.from(stockChanges.keys());
             const partRefs = partIds.map(id => doc(db, "parts", id));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
 
-            // Validate stock levels before writing
             for(let i = 0; i < partDocs.length; i++) {
                 const partDoc = partDocs[i];
                 const partId = partIds[i];
                 if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
                 
                 const stockChange = stockChanges.get(partId) || 0;
-                // If stockChange > 0, we are returning items, so no check needed.
-                if (stockChange < 0) {
-                  const currentStock = partDoc.data().stock;
-                  if (currentStock + stockChange < 0) {
-                      throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required: ${-stockChange}`);
-                  }
+                const currentStock = partDoc.data().stock;
+                if (currentStock + stockChange < 0) {
+                    throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required change: ${-stockChange}`);
                 }
             }
             
-            // Apply stock changes
             for (const [partId, change] of stockChanges.entries()) {
                 if (change !== 0) {
                     const partRef = doc(db, "parts", partId);
                     transaction.update(partRef, { stock: increment(change) });
                 }
             }
-            
-            // Prepare and update the invoice
-            const newSubtotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-            const newTax = data.items.reduce((acc, item) => acc + item.tax * item.quantity, 0);
-            const newTotal = newSubtotal + newTax;
-            const newBalanceDue = newTotal - data.paidAmount;
-            const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
-            const selectedCustomer = customers.find(c => c.id === data.customerId);
-            
-            const finalInvoiceData = {
-                ...data,
-                customerName: selectedCustomer?.name || '',
-                customerAddress: selectedCustomer?.address || '',
-                customerPhone: selectedCustomer?.phone || '',
-                subtotal: newSubtotal,
-                tax: newTax,
-                total: newTotal,
-                balanceDue: newBalanceDue,
-                status: newStatus,
-                updatedAt: serverTimestamp(),
-            };
             
             transaction.update(invoiceRef, finalInvoiceData);
         });
@@ -488,7 +486,7 @@ export default function EditInvoicePage() {
                   </div>
               </div>
                <div className="flex w-full justify-end gap-2">
-                    <Button asChild variant="outline">
+                    <Button asChild variant="outline" type="button">
                         <Link href="/dashboard/invoices">Cancel</Link>
                     </Button>
                     <Button type="submit" disabled={isSaving}>

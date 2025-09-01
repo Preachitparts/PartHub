@@ -80,6 +80,7 @@ export default function EditInvoicePage() {
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null);
 
   const invoiceForm = useForm<InvoiceFormValues>({
     resolver: zodResolver(invoiceSchema),
@@ -107,13 +108,14 @@ export default function EditInvoicePage() {
             const invoiceDoc = await getDoc(invoiceRef);
             if (invoiceDoc.exists()) {
                 const invoiceData = {id: invoiceDoc.id, ...invoiceDoc.data()} as Invoice;
+                setOriginalInvoice(invoiceData);
                 
                 invoiceForm.reset({
                     invoiceNumber: invoiceData.invoiceNumber,
                     customerId: invoiceData.customerId,
                     invoiceDate: invoiceData.invoiceDate,
                     dueDate: invoiceData.dueDate,
-                    paidAmount: invoiceData.paidAmount,
+                    paidAmount: invoiceData.paidAmount || 0,
                     items: invoiceData.items.map(i => ({...i, total: i.total || ((i.unitPrice + i.tax) * i.quantity)}))
                 });
             } else {
@@ -205,77 +207,76 @@ export default function EditInvoicePage() {
   
   async function onSubmit(data: InvoiceFormValues) {
     setIsSaving(true);
+    if (!originalInvoice) {
+        toast({ variant: "destructive", title: "Save Failed", description: "Original invoice data not found." });
+        setIsSaving(false);
+        return;
+    }
+
+    const selectedCustomer = customers.find(c => c.id === data.customerId);
+    if (!selectedCustomer) {
+        toast({ variant: "destructive", title: "Save Failed", description: "Customer not found." });
+        setIsSaving(false);
+        return;
+    }
+
+    const newSubtotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+    const newTax = data.items.reduce((acc, item) => acc + item.tax * item.quantity, 0);
+    const newTotal = newSubtotal + newTax;
+    const newBalanceDue = newSubtotal - data.paidAmount;
+    const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+
+    const finalInvoiceData: Omit<Invoice, "id" | "createdAt"> = {
+        ...data,
+        customerName: selectedCustomer.name || '',
+        customerAddress: selectedCustomer.address || '',
+        customerPhone: selectedCustomer.phone || '',
+        subtotal: newSubtotal,
+        tax: newTax,
+        total: newTotal,
+        balanceDue: newBalanceDue,
+        status: newStatus,
+        updatedAt: serverTimestamp(),
+    };
 
     try {
-        const selectedCustomer = customers.find(c => c.id === data.customerId);
-        if (!selectedCustomer) throw new Error("Customer not found.");
-
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-            const originalInvoiceDoc = await transaction.get(invoiceRef);
-
-            if (!originalInvoiceDoc.exists()) {
-                throw new Error("Invoice not found. It may have been deleted.");
-            }
-            const originalInvoice = originalInvoiceDoc.data() as Invoice;
             
-            const newSubtotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-            const newTax = data.items.reduce((acc, item) => acc + item.tax * item.quantity, 0);
-            const newTotal = newSubtotal + newTax;
-            const newBalanceDue = newSubtotal - data.paidAmount;
-            const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
-
-            const finalInvoiceData = {
-                ...data,
-                customerName: selectedCustomer.name || '',
-                customerAddress: selectedCustomer.address || '',
-                customerPhone: selectedCustomer.phone || '',
-                subtotal: newSubtotal,
-                tax: newTax,
-                total: newTotal,
-                balanceDue: newBalanceDue,
-                status: newStatus,
-                updatedAt: serverTimestamp(),
-            };
-
+            // Calculate stock differences
             const stockChanges = new Map<string, number>();
 
+            // Add back original quantities
             originalInvoice.items.forEach(item => {
                 stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
             });
 
+            // Subtract new quantities
             finalInvoiceData.items.forEach(item => {
                 stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
             });
             
-            const partRefs = new Map<string, any>();
-            const partDocs = new Map<string, any>();
-
-            for (const partId of stockChanges.keys()) {
-                if (stockChanges.get(partId) !== 0) {
+            // Validate stock levels before writing
+            const partRefsToUpdate = Array.from(stockChanges.keys()).filter(partId => stockChanges.get(partId) !== 0);
+            
+            for (const partId of partRefsToUpdate) {
+                const change = stockChanges.get(partId)!;
+                if (change < 0) { // If we are decrementing stock
                     const partRef = doc(db, "parts", partId);
-                    partRefs.set(partId, partRef);
                     const partDoc = await transaction.get(partRef);
                     if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
-                    partDocs.set(partId, partDoc);
-                }
-            }
-
-            for (const [partId, change] of stockChanges.entries()) {
-                if (change < 0) {
-                    const partDoc = partDocs.get(partId);
                     const currentStock = partDoc.data().stock;
                     if (currentStock < Math.abs(change)) {
-                        throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required: ${Math.abs(change)}`);
+                        throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required: ${Math.abs(change)} more.`);
                     }
                 }
             }
             
-            for (const [partId, change] of stockChanges.entries()) {
-                if(change !== 0) {
-                   const partRef = partRefs.get(partId);
-                   transaction.update(partRef, { stock: increment(change) });
-                }
+            // Apply all changes
+            for (const partId of partRefsToUpdate) {
+               const change = stockChanges.get(partId)!;
+               const partRef = doc(db, "parts", partId);
+               transaction.update(partRef, { stock: increment(change) });
             }
             
             transaction.set(invoiceRef, finalInvoiceData, { merge: true });

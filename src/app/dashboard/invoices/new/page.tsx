@@ -8,7 +8,7 @@ import * as z from "zod";
 import { collection, getDocs, doc, runTransaction, increment } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import type { Part, Invoice, InvoiceItem } from "@/types";
+import type { Part, Invoice } from "@/types";
 import { logActivity } from "@/lib/activity-log";
 
 import { Button } from "@/components/ui/button";
@@ -66,10 +66,13 @@ const invoiceSchema = z.object({
   customerAddress: z.string().optional(),
   customerPhone: z.string().optional(),
   invoiceDate: z.string(),
+  dueDate: z.string().min(1, "Due date is required."),
   items: z.array(invoiceItemSchema).min(1, "Please add at least one item."),
   subtotal: z.number(),
   tax: z.number(),
   total: z.number(),
+  paidAmount: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number().min(0, "Paid amount cannot be negative.")),
+  balanceDue: z.number(),
 });
 
 type InvoiceFormValues = z.infer<typeof invoiceSchema>;
@@ -79,12 +82,18 @@ export default function NewInvoicePage() {
   const [parts, setParts] = useState<Part[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  
+  const today = new Date();
+  const futureDate = new Date(today);
+  futureDate.setDate(today.getDate() + 30);
+
 
   const form = useForm<InvoiceFormValues>({
     resolver: zodResolver(invoiceSchema),
     defaultValues: {
       invoiceNumber: `INV-${Date.now().toString().slice(-8)}`,
-      invoiceDate: new Date().toISOString().split("T")[0],
+      invoiceDate: today.toISOString().split("T")[0],
+      dueDate: futureDate.toISOString().split("T")[0],
       customerName: "",
       customerAddress: "",
       customerPhone: "",
@@ -92,6 +101,8 @@ export default function NewInvoicePage() {
       subtotal: 0,
       tax: 0,
       total: 0,
+      paidAmount: 0,
+      balanceDue: 0,
     },
   });
 
@@ -123,8 +134,9 @@ export default function NewInvoicePage() {
   }, []);
 
   const watchItems = form.watch("items");
+  const watchPaidAmount = form.watch("paidAmount");
 
-  const { subtotal, taxAmount, total } = useMemo(() => {
+  const { subtotal, taxAmount, total, balanceDue } = useMemo(() => {
     const subtotal = watchItems.reduce(
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
@@ -134,14 +146,16 @@ export default function NewInvoicePage() {
       0
     );
     const total = subtotal + taxAmount;
+    const balanceDue = total - (watchPaidAmount || 0);
     
     // Set form values for submission
     form.setValue("subtotal", subtotal);
     form.setValue("tax", taxAmount);
     form.setValue("total", total);
+    form.setValue("balanceDue", balanceDue);
     
-    return { subtotal, taxAmount, total };
-  }, [watchItems, form]);
+    return { subtotal, taxAmount, total, balanceDue };
+  }, [watchItems, watchPaidAmount, form]);
 
   const handlePartChange = (index: number, partId: string) => {
     const selectedPart = parts.find((p) => p.id === partId);
@@ -224,12 +238,15 @@ export default function NewInvoicePage() {
             }
 
             // 3. Save the invoice
+            const status = data.balanceDue <= 0 ? 'Paid' : 'Unpaid';
             const invoiceToSave: Omit<Invoice, 'id'> & {date?: any} = {
                 invoiceNumber: data.invoiceNumber,
                 customerName: data.customerName,
                 customerAddress: data.customerAddress || '',
                 customerPhone: data.customerPhone || '',
                 invoiceDate: data.invoiceDate,
+                dueDate: data.dueDate,
+                status: status,
                 items: data.items.map(i => ({
                     partId: i.partId,
                     partName: i.partName,
@@ -243,6 +260,8 @@ export default function NewInvoicePage() {
                 subtotal: data.subtotal,
                 tax: data.tax,
                 total: data.total,
+                paidAmount: data.paidAmount,
+                balanceDue: data.balanceDue,
             };
             transaction.set(invoiceRef, invoiceToSave);
         });
@@ -306,21 +325,25 @@ export default function NewInvoicePage() {
 
         <Card>
           <CardHeader>
-            <div className="grid grid-cols-2 gap-6">
-              <div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="lg:col-span-2">
                 <CardTitle>Bill To</CardTitle>
                 <CardDescription>
                   Enter the customer's details.
                 </CardDescription>
               </div>
-              <div className="flex justify-end items-start gap-4">
-                 <div className="grid w-full max-w-sm items-center gap-1.5">
+              <div className="lg:col-span-2 grid grid-cols-2 gap-4">
+                 <div className="grid w-full items-center gap-1.5">
                     <FormLabel>Invoice Number</FormLabel>
                     <Input disabled defaultValue={form.getValues("invoiceNumber")} />
                  </div>
-                 <div className="grid w-full max-w-sm items-center gap-1.5">
+                 <div className="grid w-full items-center gap-1.5">
                     <FormLabel>Date</FormLabel>
                     <Input type="date" {...form.register("invoiceDate")} />
+                 </div>
+                 <div className="grid w-full items-center gap-1.5">
+                    <FormLabel>Due Date</FormLabel>
+                    <Input type="date" {...form.register("dueDate")} />
                  </div>
               </div>
             </div>
@@ -472,6 +495,22 @@ export default function NewInvoicePage() {
                     <span>Total</span>
                     <span>GHS {total.toFixed(2)}</span>
                 </div>
+                <FormField
+                control={form.control}
+                name="paidAmount"
+                render={({ field }) => (
+                  <FormItem className="flex justify-between items-center">
+                    <FormLabel>Amount Paid</FormLabel>
+                    <FormControl>
+                        <Input type="number" step="0.01" className="w-32" {...field} />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+               <div className="flex justify-between font-bold text-lg text-primary">
+                    <span>Balance Due</span>
+                    <span>GHS {balanceDue.toFixed(2)}</span>
+                </div>
             </div>
           </CardFooter>
         </Card>
@@ -479,5 +518,3 @@ export default function NewInvoicePage() {
     </Form>
   );
 }
-
-    

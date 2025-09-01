@@ -28,7 +28,6 @@ import {
   PlusCircle,
   Trash2,
   Loader2,
-  MinusCircle,
   FileText,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -36,10 +35,11 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { logActivity } from "@/lib/activity-log";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+
 
 interface CartItem extends Part {
   quantity: number;
-  // Allow overriding price and tax for the sale
   salePrice: number;
   saleTax: number;
 }
@@ -53,6 +53,12 @@ export default function POSPage() {
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
+  const [paidAmount, setPaidAmount] = useState(0);
+  
+  const today = new Date();
+  const futureDate = new Date(today);
+  futureDate.setDate(today.getDate() + 30);
+  const [dueDate, setDueDate] = useState(futureDate.toISOString().split("T")[0]);
 
   const { toast } = useToast();
   const router = useRouter();
@@ -133,7 +139,6 @@ export default function POSPage() {
 
           if (field === 'quantity') {
             if (value <= 0) {
-              // This will be filtered out later
               return { ...updatedItem, quantity: 0 };
             }
             if (value > partInCatalog.stock) {
@@ -148,7 +153,7 @@ export default function POSPage() {
           return updatedItem;
         }
         return item;
-      }).filter(item => item.quantity > 0); // Remove items with quantity 0
+      }).filter(item => item.quantity > 0);
     });
   };
 
@@ -156,12 +161,19 @@ export default function POSPage() {
     setCart((currentCart) => currentCart.filter((item) => item.id !== partId));
   };
   
-  const {subtotal, taxAmount, total} = useMemo(() => {
+  const {subtotal, taxAmount, total, balanceDue} = useMemo(() => {
     const subtotal = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
     const taxAmount = cart.reduce((acc, item) => acc + item.saleTax * item.quantity, 0);
     const total = subtotal + taxAmount;
-    return { subtotal, taxAmount, total };
-  }, [cart]);
+    const balanceDue = total - paidAmount;
+    return { subtotal, taxAmount, total, balanceDue };
+  }, [cart, paidAmount]);
+
+  useEffect(() => {
+    // When cart total changes, update the paid amount to be the full total by default
+    setPaidAmount(total);
+  }, [total]);
+
 
   const handleCompleteSale = async () => {
     if (cart.length === 0) {
@@ -178,65 +190,51 @@ export default function POSPage() {
 
     try {
         await runTransaction(db, async (transaction) => {
-            // 1. Check stock for all items
             for (const item of cart) {
                 const partRef = doc(db, "parts", item.id);
                 const partDoc = await transaction.get(partRef);
-                if (!partDoc.exists()) {
-                    throw new Error(`Part ${item.name} not found.`);
-                }
+                if (!partDoc.exists()) throw new Error(`Part ${item.name} not found.`);
                 const currentStock = partDoc.data().stock;
                 if (currentStock < item.quantity) {
                     throw new Error(`Not enough stock for ${item.name}. Available: ${currentStock}, Requested: ${item.quantity}`);
                 }
-            }
-
-            // 2. Decrement stock for all items
-            for (const item of cart) {
-                const partRef = doc(db, "parts", item.id);
                 transaction.update(partRef, { stock: increment(-item.quantity) });
             }
 
-            // 3. Create and save the invoice
             const invoiceRef = doc(db, "invoices", invoiceNumber);
+            const status = balanceDue <= 0 ? 'Paid' : 'Unpaid';
             const invoiceToSave: Omit<Invoice, 'id'> = {
                 invoiceNumber: invoiceNumber,
                 customerName: customerName,
                 customerAddress: customerAddress || '',
                 customerPhone: customerPhone || '',
                 invoiceDate: new Date().toISOString().split("T")[0],
+                dueDate,
+                status,
                 items: cart.map(i => ({
-                    partId: i.id,
-                    partName: i.name,
-                    partNumber: i.partNumber,
-                    quantity: i.quantity,
-                    unitPrice: i.salePrice,
-                    tax: i.saleTax,
-                    exFactPrice: i.salePrice + i.saleTax,
-                    total: (i.salePrice + i.saleTax) * i.quantity,
+                    partId: i.id, partName: i.name, partNumber: i.partNumber,
+                    quantity: i.quantity, unitPrice: i.salePrice, tax: i.saleTax,
+                    exFactPrice: i.salePrice + i.saleTax, total: (i.salePrice + i.saleTax) * i.quantity,
                 })),
                 subtotal: subtotal,
                 tax: taxAmount,
                 total: total,
+                paidAmount: paidAmount,
+                balanceDue: balanceDue,
             };
             transaction.set(invoiceRef, invoiceToSave);
         });
 
         await logActivity(`Completed sale for invoice ${invoiceNumber} to ${customerName}.`);
-
-        toast({
-            title: "Sale Complete!",
-            description: `Invoice ${invoiceNumber} created and stock updated.`,
-        });
-
-        // Reset state
+        toast({ title: "Sale Complete!", description: `Invoice ${invoiceNumber} created and stock updated.` });
+        
         setCart([]);
         setCustomerName("");
         setCustomerPhone("");
         setCustomerAddress("");
         setSearchTerm("");
+        setPaidAmount(0);
         
-        // Redirect to invoices page
         router.push('/dashboard/invoices');
 
     } catch (error: any) {
@@ -254,7 +252,6 @@ export default function POSPage() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Left Side: Product Selection */}
       <div className="lg:col-span-2">
         <Card>
           <CardHeader>
@@ -323,25 +320,31 @@ export default function POSPage() {
         </Card>
       </div>
 
-      {/* Right Side: Cart and Checkout */}
       <div>
         <Card>
           <CardHeader>
             <CardTitle>Current Sale</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                    <Label htmlFor="customerName">Customer Name</Label>
+                    <Input id="customerName" placeholder="John Doe" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+                </div>
+                 <div className="space-y-2">
+                    <Label htmlFor="customerPhone">Customer Phone</Label>
+                    <Input id="customerPhone" placeholder="024 123 4567" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
+                </div>
+            </div>
             <div className="space-y-2">
-                <Label htmlFor="customerName">Customer Name</Label>
-                <Input id="customerName" placeholder="John Doe" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-            </div>
-             <div className="space-y-2">
-                <Label htmlFor="customerPhone">Customer Phone</Label>
-                <Input id="customerPhone" placeholder="024 123 4567" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
-            </div>
-             <div className="space-y-2">
                 <Label htmlFor="customerAddress">Customer Address (Optional)</Label>
-                <Input id="customerAddress" placeholder="123 Main St, Accra" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
+                <Textarea id="customerAddress" placeholder="123 Main St, Accra" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
             </div>
+             <div className="space-y-2">
+                <Label htmlFor="dueDate">Due Date</Label>
+                <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </div>
+
 
             <div className="h-60 overflow-auto border rounded-md">
               <Table>
@@ -357,52 +360,17 @@ export default function POSPage() {
                 <TableBody>
                   {cart.length === 0 ? (
                     <TableRow>
-                      <TableCell
-                        colSpan={5}
-                        className="text-center text-muted-foreground py-4"
-                      >
-                        Cart is empty
-                      </TableCell>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-4">Cart is empty</TableCell>
                     </TableRow>
                   ) : (
                     cart.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell className="font-medium line-clamp-2 pr-1">{item.name}</TableCell>
-                        <TableCell>
-                          <Input 
-                            type="number" 
-                            className="w-16" 
-                            value={item.quantity}
-                            onChange={(e) => updateCartItem(item.id, 'quantity', parseInt(e.target.value))}
-                          />
-                        </TableCell>
-                         <TableCell>
-                          <Input 
-                            type="number" 
-                            step="0.01"
-                            className="w-20" 
-                            value={item.salePrice}
-                            onChange={(e) => updateCartItem(item.id, 'salePrice', parseFloat(e.target.value))}
-                          />
-                        </TableCell>
-                         <TableCell>
-                          <Input 
-                            type="number" 
-                            step="0.01"
-                            className="w-20" 
-                            value={item.saleTax}
-                            onChange={(e) => updateCartItem(item.id, 'saleTax', parseFloat(e.target.value))}
-                          />
-                        </TableCell>
+                        <TableCell><Input type="number" className="w-16" value={item.quantity} onChange={(e) => updateCartItem(item.id, 'quantity', parseInt(e.target.value))}/></TableCell>
+                         <TableCell><Input type="number" step="0.01" className="w-20" value={item.salePrice} onChange={(e) => updateCartItem(item.id, 'salePrice', parseFloat(e.target.value))}/></TableCell>
+                         <TableCell><Input type="number" step="0.01" className="w-20" value={item.saleTax} onChange={(e) => updateCartItem(item.id, 'saleTax', parseFloat(e.target.value))}/></TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="text-destructive hover:text-destructive h-8 w-8"
-                            onClick={() => removeFromCart(item.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive h-8 w-8" onClick={() => removeFromCart(item.id)}><Trash2 className="h-4 w-4" /></Button>
                         </TableCell>
                       </TableRow>
                     ))
@@ -411,18 +379,14 @@ export default function POSPage() {
               </Table>
             </div>
             <div className="mt-2 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-                <span>GHS {subtotal.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Tax</span>
-                <span>GHS {taxAmount.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-base">
-                <span>Total</span>
-                <span>GHS {total.toFixed(2)}</span>
-              </div>
+                <div className="flex justify-between"><span>Subtotal</span><span>GHS {subtotal.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span>Tax</span><span>GHS {taxAmount.toFixed(2)}</span></div>
+                <div className="flex justify-between font-bold text-base"><span>Total</span><span>GHS {total.toFixed(2)}</span></div>
+                <div className="flex justify-between items-center">
+                    <Label htmlFor="paidAmount">Amount Paid</Label>
+                    <Input id="paidAmount" type="number" step="0.01" className="w-32" value={paidAmount} onChange={(e) => setPaidAmount(parseFloat(e.target.value) || 0)} />
+                </div>
+                 <div className="flex justify-between font-bold text-base text-primary"><span>Balance Due</span><span>GHS {balanceDue.toFixed(2)}</span></div>
             </div>
           </CardContent>
           <CardFooter>
@@ -436,5 +400,3 @@ export default function POSPage() {
     </div>
   );
 }
-
-    

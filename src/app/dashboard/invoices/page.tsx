@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/components/ui/dialog";
-import { PlusCircle, Loader2, Eye, Pencil, Download } from "lucide-react";
+import { PlusCircle, Loader2, Eye, Pencil, Download, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { useToast } from "@/hooks/use-toast";
 import type { Invoice } from "@/types";
@@ -16,6 +16,9 @@ import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+
 
 // Extend jsPDF with autoTable method
 interface jsPDFWithAutoTable extends jsPDF {
@@ -38,10 +41,19 @@ export default function InvoicesPage() {
                 const querySnapshot = await getDocs(invoicesQuery);
                 const invoicesList = querySnapshot.docs.map(doc => {
                     const data = doc.data();
+                    const dueDate = new Date(data.dueDate);
+                    const today = new Date();
+                    today.setHours(0,0,0,0); // Compare dates only
+                    
+                    let status = data.status;
+                    if (status === 'Unpaid' && dueDate < today) {
+                        status = 'Overdue';
+                    }
+
                     return {
                         id: doc.id,
                         ...data,
-                        // Ensure invoiceDate is a Date object for calculations
+                        status: status, // Use the derived status
                         invoiceDateObject: new Date(data.invoiceDate),
                     } as Invoice & { invoiceDateObject: Date };
                 });
@@ -114,9 +126,11 @@ export default function InvoicesPage() {
         doc.setFont('helvetica', 'bold');
         doc.text(`Invoice #:`, 140, 51);
         doc.text(`Date:`, 140, 56);
+        doc.text(`Due Date:`, 140, 61);
         doc.setFont('helvetica', 'normal');
-        doc.text(`${invoice.invoiceNumber}`, 160, 51);
-        doc.text(`${new Date(invoice.invoiceDate).toLocaleDateString()}`, 160, 56);
+        doc.text(`${invoice.invoiceNumber}`, 165, 51);
+        doc.text(`${new Date(invoice.invoiceDate).toLocaleDateString()}`, 165, 56);
+        doc.text(`${new Date(invoice.dueDate).toLocaleDateString()}`, 165, 61);
         
 
         // Table
@@ -138,19 +152,25 @@ export default function InvoicesPage() {
         doc.autoTable({
             head: [tableColumn],
             body: tableRows,
-            startY: 75, // Start table lower to give space for address
+            startY: yPos + 10,
             headStyles: { fillColor: [41, 128, 185] },
             styles: { fontSize: 9 },
         });
 
         // Totals
-        const finalY = doc.autoTable.previous.finalY;
+        let finalY = (doc as any).autoTable.previous.finalY;
+        if (finalY > pageHeight - 40) {
+            doc.addPage();
+            finalY = 20;
+        }
+
         doc.setFontSize(10);
         doc.text(`Subtotal: GHS ${invoice.subtotal.toFixed(2)}`, 140, finalY + 10);
         doc.text(`Tax: GHS ${invoice.tax.toFixed(2)}`, 140, finalY + 15);
+        doc.text(`Paid: GHS ${invoice.paidAmount.toFixed(2)}`, 140, finalY + 20);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text(`Total: GHS ${invoice.total.toFixed(2)}`, 140, finalY + 22);
+        doc.text(`Balance Due: GHS ${invoice.balanceDue.toFixed(2)}`, 140, finalY + 27);
         doc.setFont('helvetica', 'normal');
 
         // Footer
@@ -196,7 +216,9 @@ export default function InvoicesPage() {
                                     <TableHead>Invoice #</TableHead>
                                     <TableHead>Customer</TableHead>
                                     <TableHead>Date</TableHead>
-                                    <TableHead className="text-right">Total Amount</TableHead>
+                                    <TableHead>Due Date</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-right">Balance Due</TableHead>
                                     <TableHead className="text-center">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -208,7 +230,16 @@ export default function InvoicesPage() {
                                             <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
                                             <TableCell>{invoice.customerName}</TableCell>
                                             <TableCell>{new Date(invoice.invoiceDate).toLocaleDateString()}</TableCell>
-                                            <TableCell className="text-right">GHS {invoice.total.toFixed(2)}</TableCell>
+                                            <TableCell>{new Date(invoice.dueDate).toLocaleDateString()}</TableCell>
+                                            <TableCell>
+                                                <Badge variant={
+                                                    invoice.status === 'Paid' ? 'secondary' : 
+                                                    invoice.status === 'Overdue' ? 'destructive' : 'default'
+                                                } className={cn(invoice.status === 'Unpaid' && 'bg-amber-500 text-white')}>
+                                                    {invoice.status}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="text-right font-medium">GHS {invoice.balanceDue.toFixed(2)}</TableCell>
                                             <TableCell className="flex justify-center items-center">
                                                 <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
                                                     <Eye className="h-4 w-4" />
@@ -239,9 +270,11 @@ export default function InvoicesPage() {
                             </TableBody>
                         </Table>
                     ) : (
-                        <p className="text-muted-foreground text-center py-8">
-                            No invoices have been created yet.
-                        </p>
+                         <div className="text-center py-10">
+                            <AlertCircle className="mx-auto h-12 w-12 text-muted-foreground" />
+                            <h3 className="mt-4 text-lg font-medium">No invoices found</h3>
+                            <p className="mt-1 text-sm text-muted-foreground">Get started by creating a new invoice.</p>
+                         </div>
                     )}
                 </CardContent>
             </Card>
@@ -268,6 +301,21 @@ export default function InvoicesPage() {
                             <div>
                                 <Label className="font-semibold">Invoice Date</Label>
                                 <p>{new Date(selectedInvoice.invoiceDate).toLocaleDateString()}</p>
+                            </div>
+                             <div>
+                                <Label className="font-semibold">Due Date</Label>
+                                <p>{new Date(selectedInvoice.dueDate).toLocaleDateString()}</p>
+                            </div>
+                             <div>
+                                <Label className="font-semibold">Status</Label>
+                                <p>
+                                     <Badge variant={
+                                        selectedInvoice.status === 'Paid' ? 'secondary' : 
+                                        selectedInvoice.status === 'Overdue' ? 'destructive' : 'default'
+                                    } className={cn(selectedInvoice.status === 'Unpaid' && 'bg-amber-500 text-white')}>
+                                        {selectedInvoice.status}
+                                    </Badge>
+                                </p>
                             </div>
                             <div className="md:col-span-3">
                                 <Label className="font-semibold">Customer Address</Label>
@@ -311,9 +359,17 @@ export default function InvoicesPage() {
                                     <span>Tax</span>
                                     <span>GHS {selectedInvoice.tax.toFixed(2)}</span>
                                  </div>
-                                <div className="flex justify-between font-bold text-lg">
-                                    <span>Total</span>
+                                  <div className="flex justify-between">
+                                    <span>Total Amount</span>
                                     <span>GHS {selectedInvoice.total.toFixed(2)}</span>
+                                 </div>
+                                  <div className="flex justify-between text-destructive">
+                                    <span>Amount Paid</span>
+                                    <span>- GHS {selectedInvoice.paidAmount.toFixed(2)}</span>
+                                 </div>
+                                <div className="flex justify-between font-bold text-lg border-t pt-2">
+                                    <span>Balance Due</span>
+                                    <span>GHS {selectedInvoice.balanceDue.toFixed(2)}</span>
                                 </div>
                             </div>
                         </div>
@@ -334,5 +390,3 @@ export default function InvoicesPage() {
         </div>
     )
 }
-
-    

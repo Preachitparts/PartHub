@@ -57,11 +57,15 @@ export interface Invoice {
   customerAddress: string;
   customerPhone: string;
   invoiceDate: string; // Stored as 'YYYY-MM-DD'
+  dueDate: string; // Stored as 'YYYY-MM-DD'
+  status: 'Paid' | 'Unpaid' | 'Overdue';
   invoiceDateObject?: Date; // Added on the client for date calculations
   items: InvoiceItem[];
   subtotal: number;
   tax: number;
   total: number;
+  paidAmount: number;
+  balanceDue: number;
 }
 
 export interface ActivityLog {
@@ -69,5 +73,3 @@ export interface ActivityLog {
     description: string;
     date: Timestamp;
 }
-
-    

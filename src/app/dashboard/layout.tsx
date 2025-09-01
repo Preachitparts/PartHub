@@ -28,6 +28,7 @@ import {
   Settings,
   FileText,
   Scale,
+  Users,
 } from "lucide-react";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <Link href="/dashboard/invoices">
                   <FileText />
                   Invoices
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+             <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname.startsWith('/dashboard/statements')}>
+                <Link href="/dashboard/statements">
+                  <Users />
+                  Statements
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

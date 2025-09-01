@@ -33,7 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlusCircle, Loader2, Upload, Download, Trash2, Eye } from "lucide-react";
-import { useForm, useFieldArray, Controller } from "react-hook-form";
+import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
@@ -91,7 +91,7 @@ export default function InventoryPage() {
   const watchItems = form.watch("items");
 
   const totalAmount = useMemo(() => {
-    return watchItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+    return watchItems.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0);
   }, [watchItems]);
 
   const fetchData = async () => {
@@ -142,6 +142,7 @@ export default function InventoryPage() {
             name: '',
             partNumber: '',
             price: 0,
+            quantity: 1,
             isNew: true,
         });
     } else {
@@ -198,6 +199,9 @@ export default function InventoryPage() {
             } else if (partId) {
                 const partRef = doc(db, "parts", partId);
                 batch.update(partRef, { stock: increment(item.quantity) });
+            } else {
+                console.warn("Skipping item without partId and not marked as new", item);
+                continue;
             }
 
             invoiceItems.push({
@@ -625,3 +629,5 @@ export default function InventoryPage() {
     </div>
   );
 }
+
+    

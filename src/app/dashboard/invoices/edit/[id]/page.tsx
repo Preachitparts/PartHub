@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const invoiceItemSchema = z.object({
   partId: z.string().min(1, "Please select a part."),
@@ -80,7 +81,7 @@ export default function EditInvoicePage() {
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [savingItemId, setSavingItemId] = useState<string | null>(null);
+  const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
 
   const invoiceForm = useForm<InvoiceFormValues>({
     resolver: zodResolver(invoiceSchema),
@@ -196,126 +197,141 @@ export default function EditInvoicePage() {
   const addNewItem = () => {
     append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, exFactPrice: 0, partName: '', partNumber: '' });
   };
-  
-  const handleSaveItem = async (index: number) => {
-      const itemToSave = invoiceForm.getValues(`items.${index}`);
-      if (!itemToSave.partId) {
-          toast({ variant: "destructive", title: "Error", description: "Please select a part before saving." });
-          return;
-      }
 
-      setSavingItemId(itemToSave.partId);
-      try {
-          await runTransaction(db, async (transaction) => {
-              const invoiceRef = doc(db, "invoices", invoiceId);
-              const partRef = doc(db, "parts", itemToSave.partId);
-
-              // Perform all reads first
-              const invoiceDoc = await transaction.get(invoiceRef);
-              const partDoc = await transaction.get(partRef);
-
-              if (!invoiceDoc.exists()) throw new Error("Invoice not found.");
-              if (!partDoc.exists()) throw new Error(`Part ${itemToSave.partName} not found.`);
-
-              const invoiceData = invoiceDoc.data() as Invoice;
-              const originalItem = invoiceData.items.find(it => it.partId === itemToSave.partId);
-              const originalQty = originalItem ? originalItem.quantity : 0;
-              
-              const currentStock = partDoc.data().stock;
-              const stockAfterReverting = currentStock + originalQty;
-              
-              if (stockAfterReverting < itemToSave.quantity) {
-                  throw new Error(`Not enough stock for ${itemToSave.partName}. Available: ${stockAfterReverting}, Requested: ${itemToSave.quantity}`);
-              }
-              
-              const stockAdjustment = originalQty - itemToSave.quantity;
-              
-              // Now perform all writes
-              transaction.update(partRef, { stock: increment(stockAdjustment) });
-
-              const updatedItems = [...invoiceData.items];
-              const existingItemIndex = updatedItems.findIndex(it => it.partId === itemToSave.partId);
-              
-              if (existingItemIndex > -1) {
-                  updatedItems[existingItemIndex] = itemToSave;
-              } else {
-                  updatedItems.push(itemToSave);
-              }
-
-              const newSubtotal = updatedItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-              const newTax = updatedItems.reduce((acc, item) => acc + item.tax * item.quantity, 0);
-              const newTotal = newSubtotal + newTax;
-              const newBalanceDue = newTotal - invoiceData.paidAmount;
-              const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
-
-              transaction.update(invoiceRef, {
-                  items: updatedItems,
-                  subtotal: newSubtotal,
-                  tax: newTax,
-                  total: newTotal,
-                  balanceDue: newBalanceDue,
-                  status: newStatus,
-                  updatedAt: serverTimestamp(),
-              });
-          });
-
-          toast({ title: "Item Saved", description: `${itemToSave.partName} has been successfully updated.` });
-          await logActivity(`Updated item ${itemToSave.partName} on invoice ${invoiceId}`);
-          await fetchInitialData(); // Refresh data to ensure consistency
-
-      } catch (error: any) {
-          console.error("Error saving item:", error);
-          toast({ variant: "destructive", title: "Save Failed", description: error.message });
-      } finally {
-          setSavingItemId(null);
-      }
+  const handleToggleSelectItem = (index: number) => {
+    setSelectedItems(prev => ({ ...prev, [index]: !prev[index] }));
   };
 
-  async function onSaveInvoiceDetailsSubmit(data: InvoiceFormValues) {
-    setIsSaving(true);
-    const selectedCustomer = customers.find(c => c.id === data.customerId);
-    if (!selectedCustomer) {
-        toast({ variant: "destructive", title: "Customer not found." });
-        setIsSaving(false);
-        return;
+  const handleToggleSelectAll = (checked: boolean) => {
+    const newSelectedItems: Record<string, boolean> = {};
+    if (checked) {
+      fields.forEach((_, index) => {
+        newSelectedItems[index] = true;
+      });
     }
+    setSelectedItems(newSelectedItems);
+  };
+  
+  const selectedCount = Object.values(selectedItems).filter(Boolean).length;
+  const allSelected = selectedCount > 0 && selectedCount === fields.length;
 
+  const handleBatchSave = async () => {
+    setIsSaving(true);
     try {
-        const invoiceRef = doc(db, "invoices", invoiceId);
-        
-        // Only update invoice-level fields, not items
-        const invoiceDetailsToUpdate = {
-            customerId: data.customerId,
-            customerName: selectedCustomer.name,
-            customerAddress: selectedCustomer.address || '',
-            customerPhone: selectedCustomer.phone || '',
-            invoiceDate: data.invoiceDate,
-            dueDate: data.dueDate,
-            paidAmount: data.paidAmount,
-            updatedAt: serverTimestamp(),
-        };
+        await runTransaction(db, async (transaction) => {
+            const invoiceRef = doc(db, "invoices", invoiceId);
+            const invoiceDoc = await transaction.get(invoiceRef);
+            if (!invoiceDoc.exists()) throw new Error("Invoice not found.");
 
-        await updateDoc(invoiceRef, invoiceDetailsToUpdate);
+            const originalInvoiceData = invoiceDoc.data() as Invoice;
+            const updatedItems = [...originalInvoiceData.items];
+            
+            const selectedIndices = Object.keys(selectedItems).filter(k => selectedItems[k]).map(Number);
+            
+            for (const index of selectedIndices) {
+                const formItem = invoiceForm.getValues(`items.${index}`);
+                if (!formItem.partId) continue;
 
-        // Recalculate totals based on existing items and new paidAmount
-        const invoiceDoc = await getDoc(invoiceRef);
-        if (invoiceDoc.exists()) {
-            const invoiceData = invoiceDoc.data() as Invoice;
-            const newBalanceDue = invoiceData.total - data.paidAmount;
-            const newStatus = newBalanceDue <= 0 ? 'Paid' : invoiceData.status === 'Paid' ? 'Paid' : 'Unpaid';
-            await updateDoc(invoiceRef, {
+                const originalItem = originalInvoiceData.items.find(it => it.partId === formItem.partId);
+                const originalQty = originalItem ? originalItem.quantity : 0;
+                
+                const partRef = doc(db, "parts", formItem.partId);
+                const partDoc = await transaction.get(partRef);
+                if (!partDoc.exists()) throw new Error(`Part ${formItem.partName} not found.`);
+
+                const currentStock = partDoc.data().stock;
+                const stockAfterReverting = currentStock + originalQty;
+
+                if (stockAfterReverting < formItem.quantity) {
+                    throw new Error(`Not enough stock for ${formItem.partName}. Available: ${stockAfterReverting}, Requested: ${formItem.quantity}`);
+                }
+                
+                const stockAdjustment = originalQty - formItem.quantity;
+                transaction.update(partRef, { stock: increment(stockAdjustment) });
+
+                const existingItemIndex = updatedItems.findIndex(it => it.partId === formItem.partId);
+                if (existingItemIndex > -1) {
+                    updatedItems[existingItemIndex] = formItem;
+                } else {
+                    updatedItems.push(formItem);
+                }
+            }
+
+            const newSubtotal = updatedItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+            const newTax = updatedItems.reduce((acc, item) => acc + item.tax * item.quantity, 0);
+            const newTotal = newSubtotal + newTax;
+            const newBalanceDue = newTotal - invoiceForm.getValues("paidAmount");
+            const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+            
+            transaction.update(invoiceRef, {
+                items: updatedItems,
+                subtotal: newSubtotal,
+                tax: newTax,
+                total: newTotal,
                 balanceDue: newBalanceDue,
-                status: newStatus
+                status: newStatus,
+                updatedAt: serverTimestamp(),
             });
-        }
+        });
         
-        toast({ title: "Invoice Details Updated", description: "Customer and payment details have been saved." });
-        await logActivity(`Updated details for invoice ${data.invoiceNumber}`);
+        toast({ title: "Items Saved", description: "Selected items have been successfully updated." });
+        await logActivity(`Updated ${selectedCount} item(s) on invoice ${invoiceId}`);
         await fetchInitialData();
+        setSelectedItems({});
 
     } catch (error: any) {
-        console.error("Error saving invoice details:", error);
+        console.error("Error saving items:", error);
         toast({ variant: "destructive", title: "Save Failed", description: error.message });
+    } finally {
+        setIsSaving(false);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    setIsSaving(true);
+    try {
+        await runTransaction(db, async (transaction) => {
+            const invoiceRef = doc(db, "invoices", invoiceId);
+            const invoiceDoc = await transaction.get(invoiceRef);
+            if (!invoiceDoc.exists()) throw new Error("Invoice not found.");
+            
+            const originalInvoiceData = invoiceDoc.data() as Invoice;
+            const selectedIndices = Object.keys(selectedItems).filter(k => selectedItems[k]).map(Number);
+            const itemsToDelete = selectedIndices.map(index => invoiceForm.getValues(`items.${index}`));
+            const remainingItems = originalInvoiceData.items.filter(item => !itemsToDelete.some(del => del.partId === item.partId));
+
+            for (const item of itemsToDelete) {
+                if (item.partId) {
+                    const partRef = doc(db, "parts", item.partId);
+                    transaction.update(partRef, { stock: increment(item.quantity) });
+                }
+            }
+            
+            const newSubtotal = remainingItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+            const newTax = remainingItems.reduce((acc, item) => acc + item.tax * item.quantity, 0);
+            const newTotal = newSubtotal + newTax;
+            const newBalanceDue = newTotal - invoiceForm.getValues("paidAmount");
+            const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+
+             transaction.update(invoiceRef, {
+                items: remainingItems,
+                subtotal: newSubtotal,
+                tax: newTax,
+                total: newTotal,
+                balanceDue: newBalanceDue,
+                status: newStatus,
+                updatedAt: serverTimestamp(),
+            });
+        });
+        
+        toast({ title: "Items Deleted", description: "Selected items have been removed from the invoice." });
+        await logActivity(`Deleted ${selectedCount} item(s) from invoice ${invoiceId}`);
+        await fetchInitialData();
+        setSelectedItems({});
+
+    } catch (error: any) {
+        console.error("Error deleting items:", error);
+        toast({ variant: "destructive", title: "Delete Failed", description: error.message });
     } finally {
         setIsSaving(false);
     }
@@ -340,7 +356,7 @@ export default function EditInvoicePage() {
   return (
     <>
       <Form {...invoiceForm}>
-        <form onSubmit={invoiceForm.handleSubmit(onSaveInvoiceDetailsSubmit)}>
+        <form onSubmit={(e) => e.preventDefault()}>
           <div className="flex justify-between items-center mb-6">
               <div className="flex items-center gap-4">
                   <Button asChild variant="outline" size="icon">
@@ -396,24 +412,56 @@ export default function EditInvoicePage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
+               <div className="flex items-center gap-2">
+                    <Button
+                        type="button"
+                        onClick={handleBatchSave}
+                        disabled={isSaving || selectedCount === 0}
+                    >
+                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                        Save Selected ({selectedCount})
+                    </Button>
+                     <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={handleBatchDelete}
+                        disabled={isSaving || selectedCount === 0}
+                    >
+                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                        Delete Selected ({selectedCount})
+                    </Button>
+                </div>
               <div>
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox 
+                          checked={allSelected}
+                          onCheckedChange={handleToggleSelectAll}
+                          aria-label="Select all items"
+                        />
+                      </TableHead>
                       <TableHead className="w-[35%]">Product</TableHead>
                       <TableHead>Qty</TableHead>
                       <TableHead>Unit Price</TableHead>
                       <TableHead>Tax</TableHead>
                       <TableHead className="text-right">Total</TableHead>
-                      <TableHead className="w-[100px] text-center">Actions</TableHead>
+                      <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {fields.map((field, index) => {
                       const item = watchItems[index];
-                      const isItemSaving = savingItemId === item?.partId;
                       return (
-                      <TableRow key={field.key}>
+                      <TableRow key={field.key} data-state={selectedItems[index] ? 'selected' : ''}>
+                        <TableCell>
+                          <Checkbox 
+                            checked={!!selectedItems[index]}
+                            onCheckedChange={() => handleToggleSelectItem(index)}
+                            aria-label={`Select item ${index + 1}`}
+                          />
+                        </TableCell>
                         <TableCell>
                           <FormField
                               control={invoiceForm.control}
@@ -468,14 +516,9 @@ export default function EditInvoicePage() {
                           GHS {item?.total?.toFixed(2) || '0.00'}
                         </TableCell>
                         <TableCell className="text-center">
-                          <div className="flex justify-end gap-1">
-                            <Button type="button" variant="ghost" size="icon" onClick={() => handleSaveItem(index)} disabled={isItemSaving}>
-                                {isItemSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 text-primary" />}
-                            </Button>
                             <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}>
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
-                          </div>
                         </TableCell>
                       </TableRow>
                     )})}
@@ -527,18 +570,6 @@ export default function EditInvoicePage() {
               </div>
             </CardFooter>
           </Card>
-          
-           <div className="flex justify-end items-center mt-6 gap-2">
-                <Button asChild variant="outline">
-                    <Link href="/dashboard/invoices">
-                        Cancel
-                    </Link>
-                </Button>
-                <Button type="submit" disabled={isSaving}>
-                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                    Save Invoice Details
-                </Button>
-            </div>
         </form>
       </Form>
     </>

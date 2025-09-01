@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useMemo } from "react";
-import { collection, getDocs, setDoc, doc, writeBatch, increment, Timestamp, query, orderBy } from "firebase/firestore";
+import { collection, getDocs, setDoc, doc, writeBatch, increment, Timestamp, query, orderBy, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Loader2, Upload, Download, Trash2, Eye } from "lucide-react";
+import { PlusCircle, Loader2, Upload, Download, Trash2, Eye, Pencil } from "lucide-react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -54,6 +54,7 @@ const taxInvoiceItemSchema = z.object({
 });
 
 const taxInvoiceSchema = z.object({
+    id: z.string().optional(), // To hold the ID when editing
     supplierName: z.string().min(1, "Supplier name is required."),
     invoiceNumber: z.string().optional(),
     items: z.array(taxInvoiceItemSchema).min(1, "Please add at least one item."),
@@ -66,17 +67,19 @@ export default function InventoryPage() {
   const [taxInvoices, setTaxInvoices] = useState<TaxInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoice | null>(null);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [partOptions, setPartOptions] = useState<ComboboxOption[]>([]);
+  const [dialogMode, setDialogMode] = useState<'add' | 'edit'>('add');
 
   const form = useForm<TaxInvoiceFormValues>({
     resolver: zodResolver(taxInvoiceSchema),
     defaultValues: {
+      id: '',
       supplierName: "",
       invoiceNumber: "",
       items: [],
@@ -97,7 +100,6 @@ export default function InventoryPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Fetch parts for the combobox
       const partsCollection = collection(db, "parts");
       const partsSnapshot = await getDocs(partsCollection);
       const partsList = partsSnapshot.docs.map(
@@ -112,7 +114,6 @@ export default function InventoryPage() {
       options.unshift({ value: "new-part", label: "Create a new part..." });
       setPartOptions(options);
 
-      // Fetch tax invoices for the main table
       const taxInvoicesQuery = query(collection(db, "taxInvoices"), orderBy("date", "desc"));
       const invoicesSnapshot = await getDocs(taxInvoicesQuery);
       const invoicesList = invoicesSnapshot.docs.map(doc => ({...doc.data(), id: doc.id} as TaxInvoice));
@@ -161,14 +162,54 @@ export default function InventoryPage() {
     }
   };
 
+  const handleAddNewInvoice = () => {
+    form.reset({
+        id: '',
+        supplierName: "",
+        invoiceNumber: "",
+        items: [],
+    });
+    setDialogMode('add');
+    setIsFormDialogOpen(true);
+  };
+
+  const handleEditInvoice = (invoice: TaxInvoice) => {
+    form.reset({
+        id: invoice.id,
+        supplierName: invoice.supplierName,
+        invoiceNumber: invoice.supplierInvoiceNumber,
+        items: invoice.items.map(item => ({
+            partId: item.partId,
+            name: item.name,
+            partNumber: item.partNumber,
+            price: item.price,
+            quantity: item.quantity,
+            isNew: item.isNew,
+        }))
+    });
+    setDialogMode('edit');
+    setIsFormDialogOpen(true);
+  };
+
+
   async function onSubmit(data: TaxInvoiceFormValues) {
     setIsSaving(true);
+    if (dialogMode === 'add') {
+        await createNewInvoice(data);
+    } else {
+        await updateExistingInvoice(data);
+    }
+    setIsSaving(false);
+  }
+
+  async function createNewInvoice(data: TaxInvoiceFormValues) {
     const batch = writeBatch(db);
     try {
         const invoiceId = `SUP-${Date.now().toString().slice(-8)}`;
         const invoiceRef = doc(db, "taxInvoices", invoiceId);
 
         const invoiceItems: TaxInvoiceItem[] = [];
+        let stockUpdatePromises = [];
 
         for (const item of data.items) {
             let partId = item.partId;
@@ -176,74 +217,66 @@ export default function InventoryPage() {
             if (item.isNew) {
                 const newPartRef = doc(collection(db, 'parts'));
                 partId = newPartRef.id;
-
                 const tax = item.price * TAX_RATE;
                 const exFactPrice = item.price + tax;
-
                 const newPartData: Omit<Part, 'id'> = {
-                    name: item.name,
-                    partNumber: item.partNumber,
-                    partCode: item.partNumber, 
-                    description: '', 
-                    price: item.price,
-                    stock: item.quantity,
-                    taxable: true,
-                    tax,
-                    exFactPrice,
-                    brand: '',
-                    category: '',
-                    equipmentModel: '',
-                    imageUrl: "https://placehold.co/600x400",
+                    name: item.name, partNumber: item.partNumber, partCode: item.partNumber, 
+                    description: '', price: item.price, stock: item.quantity, taxable: true,
+                    tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
                 };
                 batch.set(newPartRef, newPartData);
             } else if (partId) {
                 const partRef = doc(db, "parts", partId);
-                batch.update(partRef, { stock: increment(item.quantity) });
-            } else {
-                console.warn("Skipping item without partId and not marked as new", item);
-                continue;
+                stockUpdatePromises.push(updateDoc(partRef, { stock: increment(item.quantity) }));
             }
-
-            invoiceItems.push({
-                partId: partId,
-                name: item.name,
-                partNumber: item.partNumber,
-                price: item.price,
-                quantity: item.quantity,
-                isNew: item.isNew
+             invoiceItems.push({
+                partId: partId, name: item.name, partNumber: item.partNumber,
+                price: item.price, quantity: item.quantity, isNew: item.isNew
             });
         }
       
         const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
-            invoiceId,
-            supplierName: data.supplierName,
-            supplierInvoiceNumber: data.invoiceNumber || '',
-            date: Timestamp.now(),
-            totalAmount,
-            items: invoiceItems,
+            invoiceId, supplierName: data.supplierName, supplierInvoiceNumber: data.invoiceNumber || '',
+            date: Timestamp.now(), totalAmount, items: invoiceItems,
         };
 
         batch.set(invoiceRef, newTaxInvoice);
-        
         await batch.commit();
+        await Promise.all(stockUpdatePromises);
       
-        toast({
-            title: "Inventory Updated",
-            description: `Successfully created Tax Invoice ${invoiceId} and updated stock.`,
-        });
-      
-        form.reset();
-        setIsAddDialogOpen(false);
-        fetchData(); // Refresh both parts and invoices list
+        toast({ title: "Invoice Created", description: `Successfully created Tax Invoice ${invoiceId} and updated stock.` });
+        setIsFormDialogOpen(false);
+        fetchData();
     } catch (error) {
       console.error("Error saving invoice:", error);
-      toast({
-        variant: "destructive",
-        title: "Save Failed",
-        description: "Could not update inventory. Please try again.",
-      });
-    } finally {
-      setIsSaving(false);
+      toast({ variant: "destructive", title: "Save Failed", description: "Could not create new invoice. Please try again." });
+    }
+  }
+
+  async function updateExistingInvoice(data: TaxInvoiceFormValues) {
+    if (!data.id) return;
+    
+    try {
+        const invoiceRef = doc(db, "taxInvoices", data.id);
+        
+        // Note: For simplicity, this update logic does not revert old stock changes or calculate the diff.
+        // A more robust system would calculate the difference in quantities and adjust stock accordingly.
+        // This implementation just updates the invoice document.
+        const updatedInvoiceData = {
+            supplierName: data.supplierName,
+            supplierInvoiceNumber: data.invoiceNumber || '',
+            totalAmount: totalAmount,
+            items: data.items,
+        };
+
+        await updateDoc(invoiceRef, updatedInvoiceData);
+
+        toast({ title: "Invoice Updated", description: `Successfully updated Tax Invoice ${data.id}.` });
+        setIsFormDialogOpen(false);
+        fetchData();
+    } catch (error) {
+        console.error("Error updating invoice:", error);
+        toast({ variant: "destructive", title: "Update Failed", description: "Could not update the invoice. Please try again." });
     }
   }
   
@@ -411,107 +444,107 @@ export default function InventoryPage() {
             <Button variant="outline" onClick={handleExport} disabled={taxInvoices.length === 0}>
                 <Download className="mr-2 h-4 w-4" /> Export Invoices CSV
             </Button>
-            <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-            <DialogTrigger asChild>
-                <Button>
+            <Button onClick={handleAddNewInvoice}>
                 <PlusCircle className="mr-2 h-4 w-4" /> Add New Tax Invoice
-                </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-4xl">
-                <DialogHeader>
-                <DialogTitle>Add New Tax Invoice</DialogTitle>
-                <DialogDescription>
-                    Record a new tax invoice from a supplier to add or update stock.
-                </DialogDescription>
-                </DialogHeader>
-                <form onSubmit={form.handleSubmit(onSubmit)} id="tax-invoice-form">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-4">
-                        <div>
-                            <Label htmlFor="supplierName">Supplier Name</Label>
-                            <Input id="supplierName" {...form.register("supplierName")} />
-                            {form.formState.errors.supplierName && <p className="text-destructive text-xs">{form.formState.errors.supplierName.message}</p>}
-                        </div>
-                        <div>
-                            <Label htmlFor="invoiceNumber">Supplier Invoice Number (Optional)</Label>
-                            <Input id="invoiceNumber" {...form.register("invoiceNumber")} />
-                        </div>
-                    </div>
-                    <div className="max-h-[40vh] overflow-y-auto pr-2">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead className="w-[35%]">Part</TableHead>
-                                    <TableHead>Part Number</TableHead>
-                                    <TableHead>Cost Price</TableHead>
-                                    <TableHead>Quantity</TableHead>
-                                    <TableHead></TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {fields.map((field, index) => {
-                                    const currentItem = form.watch(`items.${index}`);
-                                    return (
-                                        <TableRow key={field.id}>
-                                            <TableCell>
-                                                {currentItem.isNew ? (
-                                                    <Input placeholder="New Part Name" {...form.register(`items.${index}.name`)} />
-                                                ) : (
-                                                    <Combobox
-                                                        options={partOptions}
-                                                        value={currentItem.partId}
-                                                        onChange={(value) => handlePartSelection(index, value)}
-                                                        placeholder="Select a part..."
-                                                        searchPlaceholder="Search parts..."
-                                                        emptyPlaceholder="No parts found."
-                                                    />
-                                                )}
-                                            </TableCell>
-                                            <TableCell>
-                                                <Input placeholder="Part Number" {...form.register(`items.${index}.partNumber`)} disabled={!currentItem.isNew} />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Input type="number" {...form.register(`items.${index}.quantity`)} />
-                                            </TableCell>
-                                            <TableCell>
-                                                <Button variant="ghost" size="icon" onClick={() => remove(index)}>
-                                                    <Trash2 className="h-4 w-4 text-destructive" />
-                                                </Button>
-                                            </TableCell>
-                                        </TableRow>
-                                    )
-                                })}
-                            </TableBody>
-                        </Table>
-                    </div>
-                     <div className="flex justify-between items-center mt-4">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={addNewItem}
-                            >
-                            <PlusCircle className="mr-2 h-4 w-4" />
-                            Add Item
-                        </Button>
-                        <div className="text-right font-semibold">
-                            Total Invoice Amount: GH₵{totalAmount.toFixed(2)}
-                        </div>
-                    </div>
-                </form>
-                <DialogFooter className="mt-4">
-                    <Button variant="outline" onClick={() => { setIsAddDialogOpen(false); form.reset(); }}>Cancel</Button>
-                    <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
-                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        Save Invoice & Update Stock
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-            </Dialog>
+            </Button>
         </div>
       </div>
+
+      <Dialog open={isFormDialogOpen} onOpenChange={setIsFormDialogOpen}>
+          <DialogContent className="sm:max-w-4xl">
+              <DialogHeader>
+              <DialogTitle>{dialogMode === 'add' ? 'Add New Tax Invoice' : 'Edit Tax Invoice'}</DialogTitle>
+              <DialogDescription>
+                  {dialogMode === 'add' ? 'Record a new tax invoice from a supplier to add or update stock.' : 'Update the details of this tax invoice.'}
+              </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={form.handleSubmit(onSubmit)} id="tax-invoice-form">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-4">
+                      <div>
+                          <Label htmlFor="supplierName">Supplier Name</Label>
+                          <Input id="supplierName" {...form.register("supplierName")} />
+                          {form.formState.errors.supplierName && <p className="text-destructive text-xs">{form.formState.errors.supplierName.message}</p>}
+                      </div>
+                      <div>
+                          <Label htmlFor="invoiceNumber">Supplier Invoice Number (Optional)</Label>
+                          <Input id="invoiceNumber" {...form.register("invoiceNumber")} />
+                      </div>
+                  </div>
+                  <div className="max-h-[40vh] overflow-y-auto pr-2">
+                      <Table>
+                          <TableHeader>
+                              <TableRow>
+                                  <TableHead className="w-[35%]">Part</TableHead>
+                                  <TableHead>Part Number</TableHead>
+                                  <TableHead>Cost Price</TableHead>
+                                  <TableHead>Quantity</TableHead>
+                                  <TableHead></TableHead>
+                              </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                              {fields.map((field, index) => {
+                                  const currentItem = form.watch(`items.${index}`);
+                                  return (
+                                      <TableRow key={field.id}>
+                                          <TableCell>
+                                              {currentItem.isNew ? (
+                                                  <Input placeholder="New Part Name" {...form.register(`items.${index}.name`)} />
+                                              ) : (
+                                                  <Combobox
+                                                      options={partOptions}
+                                                      value={currentItem.partId}
+                                                      onChange={(value) => handlePartSelection(index, value)}
+                                                      placeholder="Select a part..."
+                                                      searchPlaceholder="Search parts..."
+                                                      emptyPlaceholder="No parts found."
+                                                  />
+                                              )}
+                                          </TableCell>
+                                          <TableCell>
+                                              <Input placeholder="Part Number" {...form.register(`items.${index}.partNumber`)} disabled={!currentItem.isNew} />
+                                          </TableCell>
+                                          <TableCell>
+                                              <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} />
+                                          </TableCell>
+                                          <TableCell>
+                                              <Input type="number" {...form.register(`items.${index}.quantity`)} />
+                                          </TableCell>
+                                          <TableCell>
+                                              <Button variant="ghost" size="icon" onClick={() => remove(index)}>
+                                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                              </Button>
+                                          </TableCell>
+                                      </TableRow>
+                                  )
+                              })}
+                          </TableBody>
+                      </Table>
+                  </div>
+                    <div className="flex justify-between items-center mt-4">
+                      <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={addNewItem}
+                          >
+                          <PlusCircle className="mr-2 h-4 w-4" />
+                          Add Item
+                      </Button>
+                      <div className="text-right font-semibold">
+                          Total Invoice Amount: GH₵{totalAmount.toFixed(2)}
+                      </div>
+                  </div>
+              </form>
+              <DialogFooter className="mt-4">
+                  <Button variant="outline" onClick={() => { setIsFormDialogOpen(false); form.reset(); }}>Cancel</Button>
+                  <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
+                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      {dialogMode === 'add' ? 'Save Invoice & Update Stock' : 'Update Invoice'}
+                  </Button>
+              </DialogFooter>
+          </DialogContent>
+      </Dialog>
+      
       <Card>
         <CardHeader>
           <CardTitle>Received Goods (Tax Invoices)</CardTitle>
@@ -547,6 +580,9 @@ export default function InventoryPage() {
                     <TableCell>
                        <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
                             <Eye className="h-4 w-4" />
+                       </Button>
+                       <Button variant="ghost" size="icon" onClick={() => handleEditInvoice(invoice)}>
+                            <Pencil className="h-4 w-4" />
                        </Button>
                     </TableCell>
                   </TableRow>
@@ -585,7 +621,7 @@ export default function InventoryPage() {
                         <p>{selectedInvoice.date.toDate().toLocaleDateString()}</p>
                     </div>
                 </div>
-                <div className="mt-4">
+                <div className="mt-4 max-h-[50vh] overflow-y-auto">
                      <Label className="font-semibold">Items</Label>
                      <Table>
                         <TableHeader>

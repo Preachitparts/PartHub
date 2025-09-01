@@ -256,86 +256,87 @@ export default function InventoryPage() {
 
   async function updateExistingInvoice(data: TaxInvoiceFormValues) {
     if (!data.id) throw new Error("Invoice ID is missing.");
+    const invoiceId = data.id;
 
-    await runTransaction(db, async (transaction) => {
-        const invoiceRef = doc(db, "taxInvoices", data.id!);
-        const invoiceDoc = await transaction.get(invoiceRef);
+    try {
+        await runTransaction(db, async (transaction) => {
+            const invoiceRef = doc(db, "taxInvoices", invoiceId);
+            const invoiceDoc = await transaction.get(invoiceRef);
 
-        if (!invoiceDoc.exists()) {
-            throw new Error("Invoice not found.");
-        }
-        
-        const originalInvoice = invoiceDoc.data() as TaxInvoice;
-        const stockAdjustments = new Map<string, number>();
-
-        // Create maps for easy lookup
-        const originalItemsMap = new Map(originalInvoice.items.map(item => [item.partId, item.quantity]));
-        const updatedItemsMap = new Map(data.items.map(item => [item.partId, item]));
-
-        // Calculate stock adjustments for existing parts
-        const allPartIds = new Set([...originalItemsMap.keys(), ...updatedItemsMap.keys()]);
-        
-        for (const partId of allPartIds) {
-            if (!partId) continue;
-            const originalQty = originalItemsMap.get(partId) || 0;
-            const updatedQty = updatedItemsMap.get(partId)?.quantity || 0;
-            const adjustment = updatedQty - originalQty;
-
-            if (adjustment !== 0) {
-                 stockAdjustments.set(partId, adjustment);
+            if (!invoiceDoc.exists()) {
+                throw new Error("Invoice not found.");
             }
-        }
-        
-        // Handle parts that are completely new (not in DB yet)
-        for (const item of data.items) {
-            if (item.isNew && !item.partId) { // Ensure it's a truly new item
-                const newPartRef = doc(collection(db, 'parts'));
-                item.partId = newPartRef.id; // Assign a new ID so it can be updated
-                const tax = item.price * TAX_RATE;
-                const exFactPrice = item.price + tax;
-                const newPartData: Omit<Part, 'id'> = {
-                    name: item.name, partNumber: item.partNumber, partCode: item.partNumber, 
-                    description: '', price: item.price, stock: item.quantity, taxable: true,
-                    tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
-                };
-                transaction.set(newPartRef, newPartData);
-                // The stock for this new part is set directly, no adjustment needed.
+            
+            const originalInvoice = invoiceDoc.data() as TaxInvoice;
+            const stockAdjustments = new Map<string, number>();
+
+            // Calculate stock adjustments by comparing old and new quantities
+            const originalItemsMap = new Map(originalInvoice.items.map(item => [item.partId, item.quantity]));
+            const updatedItemsData = data.items;
+
+            const allPartIds = new Set([
+                ...originalInvoice.items.map(i => i.partId),
+                ...updatedItemsData.map(i => i.partId)
+            ]);
+
+            for (const partId of allPartIds) {
+                if (!partId) continue;
+                const originalQty = originalItemsMap.get(partId) || 0;
+                const updatedItem = updatedItemsData.find(i => i.partId === partId);
+                const updatedQty = updatedItem ? updatedItem.quantity : 0;
+                
+                const adjustment = updatedQty - originalQty;
+                if (adjustment !== 0) {
+                    stockAdjustments.set(partId, adjustment);
+                }
             }
-        }
-        
-        // Apply all calculated stock adjustments for existing parts
-        for (const [partId, adjustment] of stockAdjustments.entries()) {
-            const partRef = doc(db, "parts", partId);
-            transaction.update(partRef, { stock: increment(adjustment) });
-        }
 
-        // Update the invoice document itself
-        const finalUpdatedItems = data.items.map(item => ({
-            partId: item.partId,
-            name: item.name,
-            partNumber: item.partNumber,
-            price: item.price,
-            quantity: item.quantity,
-            isNew: false // Mark all items as not new after saving
-        }));
+            // Process brand new items added during the edit
+            const finalInvoiceItems: TaxInvoiceItem[] = [];
+            for (const item of updatedItemsData) {
+                if (item.isNew && !originalItemsMap.has(item.partId)) {
+                    const newPartRef = doc(collection(db, 'parts'));
+                    const tax = item.price * TAX_RATE;
+                    const exFactPrice = item.price + tax;
+                    const newPartData: Omit<Part, 'id'> = {
+                        name: item.name, partNumber: item.partNumber, partCode: item.partNumber,
+                        description: '', price: item.price, stock: item.quantity, taxable: true,
+                        tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
+                    };
+                    transaction.set(newPartRef, newPartData);
+                    finalInvoiceItems.push({ ...item, partId: newPartRef.id, isNew: false });
+                } else {
+                    finalInvoiceItems.push({ ...item, isNew: false });
+                }
+            }
 
-        const currentTotalAmount = data.items.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0);
+            // Apply stock adjustments for existing parts
+            for (const [partId, adjustment] of stockAdjustments.entries()) {
+                const partRef = doc(db, "parts", partId);
+                transaction.update(partRef, { stock: increment(adjustment) });
+            }
 
-        const updatedInvoiceData = {
-            supplierName: data.supplierName,
-            supplierInvoiceNumber: data.invoiceNumber || '',
-            totalAmount: currentTotalAmount,
-            items: finalUpdatedItems,
-            date: Timestamp.now(), // Update the date to reflect the edit
-        };
-        transaction.update(invoiceRef, updatedInvoiceData);
-    });
+            // Update the invoice document itself
+            const currentTotalAmount = finalInvoiceItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+            
+            const updatedInvoiceData = {
+                supplierName: data.supplierName,
+                supplierInvoiceNumber: data.invoiceNumber || '',
+                totalAmount: currentTotalAmount,
+                items: finalInvoiceItems,
+                date: Timestamp.now(), // Update the date to reflect the edit
+            };
+            transaction.update(invoiceRef, updatedInvoiceData);
+        });
 
-    toast({ title: "Invoice Updated", description: `Successfully updated Tax Invoice ${data.id}.` });
-    setIsFormDialogOpen(false);
-    fetchData();
+        toast({ title: "Invoice Updated", description: `Successfully updated Tax Invoice ${invoiceId}.` });
+        setIsFormDialogOpen(false);
+        fetchData();
+    } catch (error) {
+        console.error("Failed to update invoice:", error);
+        throw error; // Re-throw to be caught by the onSubmit handler
+    }
 }
-
   
   const addNewItem = () => {
     append({ partId: "", name: "", partNumber: "", price: 0, quantity: 1, isNew: false });
@@ -725,5 +726,3 @@ export default function InventoryPage() {
     </div>
   );
 }
-
-    

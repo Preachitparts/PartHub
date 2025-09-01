@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, orderBy, query, getDoc } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, orderBy, query, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter, useParams } from "next/navigation";
 import type { Part, Invoice, Customer, InvoiceItem } from "@/types";
@@ -204,25 +204,20 @@ export default function EditInvoicePage() {
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-
-            // Fetch the invoice from within the transaction to get the latest state
             const freshInvoiceDoc = await transaction.get(invoiceRef);
             if (!freshInvoiceDoc.exists()) {
               throw new Error("Invoice does not exist.");
             }
             const originalInvoiceData = freshInvoiceDoc.data() as Invoice;
 
-
-            // Step 1: Revert original stock quantities
             for (const item of originalInvoiceData.items) {
                 const partRef = doc(db, "parts", item.partId);
                 transaction.update(partRef, { stock: increment(item.quantity) });
             }
-
-            // Step 2: Check stock for and decrement new quantities
+            
             for (const item of data.items) {
                 const partRef = doc(db, "parts", item.partId);
-                const partDoc = await transaction.get(partRef); // Get part doc after reversion
+                const partDoc = await transaction.get(partRef);
                 if (!partDoc.exists()) {
                     throw new Error(`Part with ID ${item.partId} not found.`);
                 }
@@ -233,9 +228,8 @@ export default function EditInvoicePage() {
                 transaction.update(partRef, { stock: increment(-item.quantity) });
             }
 
-            // Step 3: Update the invoice
             const status = data.balanceDue <= 0 ? 'Paid' : 'Unpaid';
-            const invoiceToSave: Omit<Invoice, 'id'> = {
+            const invoiceToSave: Omit<Invoice, 'id' | 'createdAt'> = {
                 invoiceNumber: data.invoiceNumber,
                 customerId: data.customerId,
                 customerName: selectedCustomer.name,
@@ -255,8 +249,10 @@ export default function EditInvoicePage() {
                 total: data.total,
                 paidAmount: data.paidAmount,
                 balanceDue: data.balanceDue,
+                updatedAt: serverTimestamp(),
             };
-            transaction.set(invoiceRef, invoiceToSave);
+            
+            transaction.set(invoiceRef, invoiceToSave, { merge: true });
         });
 
       await logActivity(`Updated sales invoice ${data.invoiceNumber} for ${selectedCustomer.name}.`);
@@ -307,10 +303,6 @@ export default function EditInvoicePage() {
                   </Button>
                   <h1 className="text-2xl font-semibold">Edit Invoice</h1>
               </div>
-            <Button type="submit" disabled={isSaving}>
-              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              Save Changes
-            </Button>
           </div>
 
           <Card>
@@ -480,8 +472,22 @@ export default function EditInvoicePage() {
               </div>
             </CardFooter>
           </Card>
+          
+           <div className="flex justify-end items-center mt-6 gap-2">
+                <Button asChild variant="outline">
+                    <Link href="/dashboard/invoices">
+                        Cancel
+                    </Link>
+                </Button>
+                <Button type="submit" disabled={isSaving}>
+                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                    Save Changes
+                </Button>
+            </div>
         </form>
       </Form>
     </>
   );
 }
+
+    

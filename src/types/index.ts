@@ -61,6 +61,8 @@ export interface Invoice {
   dueDate: string; // Stored as 'YYYY-MM-DD'
   status: 'Paid' | 'Unpaid' | 'Overdue';
   invoiceDateObject?: Date; // Added on the client for date calculations
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
   items: InvoiceItem[];
   subtotal: number;
   tax: number;
@@ -84,3 +86,5 @@ export interface ActivityLog {
     description: string;
     date: Timestamp;
 }
+
+    

@@ -207,23 +207,30 @@ export default function EditInvoicePage() {
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
+            const partRefsAndDocs: { [key: string]: { ref: any, doc?: any } } = {};
+            const allPartIds = new Set([...originalInvoice.items.map(i => i.partId), ...data.items.map(i => i.partId)]);
+
+            // Pre-fetch all parts involved in the transaction
+            for (const partId of allPartIds) {
+                const partRef = doc(db, "parts", partId);
+                const partDoc = await transaction.get(partRef);
+                if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
+                partRefsAndDocs[partId] = { ref: partRef, doc: partDoc };
+            }
 
             // Step 1: Revert original stock quantities
             for (const item of originalInvoice.items) {
-                const partRef = doc(db, "parts", item.partId);
-                transaction.update(partRef, { stock: increment(item.quantity) });
+                transaction.update(partRefsAndDocs[item.partId].ref, { stock: increment(item.quantity) });
             }
 
             // Step 2: Check stock for and decrement new quantities
             for (const item of data.items) {
-                const partRef = doc(db, "parts", item.partId);
-                const partDoc = await transaction.get(partRef);
-                if (!partDoc.exists()) throw new Error(`Part ${item.partName} not found.`);
-                const currentStock = partDoc.data().stock;
+                const partDoc = await transaction.get(partRefsAndDocs[item.partId].ref);
+                const currentStock = partDoc.data()?.stock;
                 if (currentStock < item.quantity) {
                     throw new Error(`Not enough stock for ${item.partName}. Available: ${currentStock}, Requested: ${item.quantity}`);
                 }
-                transaction.update(partRef, { stock: increment(-item.quantity) });
+                transaction.update(partRefsAndDocs[item.partId].ref, { stock: increment(-item.quantity) });
             }
 
             // Step 3: Update the invoice
@@ -261,9 +268,6 @@ export default function EditInvoicePage() {
       router.push("/dashboard/invoices");
 
     } catch (error: any) {
-      // If transaction fails, Firestore automatically rolls back.
-      // We might need to manually revert the revert stock operation if it was not part of the transaction.
-      // But since it is, we are safe.
       console.error("Error updating invoice:", error);
       toast({
         variant: "destructive",

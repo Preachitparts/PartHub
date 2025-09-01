@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { collection, getDocs, setDoc, doc, writeBatch } from "firebase/firestore";
+import { collection, getDocs, setDoc, doc, writeBatch, updateDoc, increment } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,8 +31,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PlusCircle, Loader2, Upload, Download } from "lucide-react";
-import { useForm, Controller } from "react-hook-form";
+import { PlusCircle, Loader2, Upload, Download, Trash2 } from "lucide-react";
+import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
@@ -40,25 +40,27 @@ import type { Part } from "@/types";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import Papa from "papaparse";
+import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 
 
 const TAX_RATE = 0.219; // 21.9%
 
-const partSchema = z.object({
-  name: z.string().min(1, "Part name is required."),
-  partNumber: z.string().min(1, "Part number is required."),
-  partCode: z.string().min(1, "Part code is required."),
-  description: z.string().optional(),
-  price: z.preprocess((a) => parseFloat(z.string().parse(a)), z.number().min(0, "Price must be a positive number.")),
-  stock: z.preprocess((a) => parseInt(z.string().parse(a), 10), z.number().int().min(0, "Stock must be a positive integer.")),
-  taxable: z.boolean().default(true),
-  brand: z.string().optional(),
-  category: z.string().optional(),
-  equipmentModel: z.string().optional(),
-  imageUrl: z.string().url("Must be a valid URL.").optional().or(z.literal('')),
+const taxInvoiceItemSchema = z.object({
+    partId: z.string().optional(),
+    name: z.string().min(1, "Part name is required."),
+    partNumber: z.string().min(1, "Part number is required."),
+    price: z.preprocess((a) => parseFloat(z.string().parse(a)), z.number().min(0, "Price must be a positive number.")),
+    quantity: z.preprocess((a) => parseInt(z.string().parse(a), 10), z.number().int().min(1, "Quantity must be at least 1.")),
+    isNew: z.boolean().default(false),
 });
 
-type PartFormValues = z.infer<typeof partSchema>;
+const taxInvoiceSchema = z.object({
+    supplierName: z.string().min(1, "Supplier name is required."),
+    invoiceNumber: z.string().optional(),
+    items: z.array(taxInvoiceItemSchema).min(1, "Please add at least one item."),
+});
+
+type TaxInvoiceFormValues = z.infer<typeof taxInvoiceSchema>;
 
 export default function InventoryPage() {
   const [parts, setParts] = useState<Part[]>([]);
@@ -67,22 +69,21 @@ export default function InventoryPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const [partOptions, setPartOptions] = useState<ComboboxOption[]>([]);
 
-  const form = useForm<PartFormValues>({
-    resolver: zodResolver(partSchema),
+  const form = useForm<TaxInvoiceFormValues>({
+    resolver: zodResolver(taxInvoiceSchema),
     defaultValues: {
-      name: "",
-      partNumber: "",
-      partCode: "",
-      description: "",
-      price: 0,
-      stock: 0,
-      taxable: true,
-      brand: "",
-      category: "",
-      equipmentModel: "",
-      imageUrl: "",
+      supplierName: "",
+      invoiceNumber: "",
+      items: [],
     },
+  });
+
+  const { fields, append, remove, update } = useFieldArray({
+    control: form.control,
+    name: "items",
   });
 
   const fetchParts = async () => {
@@ -94,6 +95,15 @@ export default function InventoryPage() {
         (doc) => ({ ...doc.data(), id: doc.id } as Part)
       );
       setParts(partsList.sort((a,b) => a.name.localeCompare(b.name)));
+      
+      const options = partsList.map(part => ({
+        value: part.id,
+        label: `${part.name} (${part.partNumber})`
+      }));
+      // Add option to create a new part
+      options.unshift({ value: "new-part", label: "Create a new part..." });
+      setPartOptions(options);
+
     } catch (error) {
        toast({
           variant: "destructive",
@@ -109,41 +119,94 @@ export default function InventoryPage() {
     fetchParts();
   }, []);
 
-  async function onSubmit(data: PartFormValues) {
+  const handlePartSelection = (index: number, value: string) => {
+    if (value === "new-part") {
+        update(index, {
+            ...fields[index],
+            partId: '',
+            name: '',
+            partNumber: '',
+            price: 0,
+            isNew: true,
+        });
+    } else {
+        const selectedPart = parts.find(p => p.id === value);
+        if (selectedPart) {
+            update(index, {
+                partId: selectedPart.id,
+                name: selectedPart.name,
+                partNumber: selectedPart.partNumber,
+                price: selectedPart.price,
+                quantity: 1,
+                isNew: false,
+            });
+        }
+    }
+  };
+
+  async function onSubmit(data: TaxInvoiceFormValues) {
     setIsSaving(true);
+    const batch = writeBatch(db);
     try {
-      const tax = data.taxable ? data.price * TAX_RATE : 0;
-      const exFactPrice = data.price + tax;
-      const newPartId = (Date.now()).toString();
+        for (const item of data.items) {
+            if (item.isNew) {
+                // Add a brand new part to the inventory
+                const newPartId = (Date.now() + Math.random()).toString(36);
+                const tax = item.price * TAX_RATE; // Assuming new parts are taxable
+                const exFactPrice = item.price + tax;
 
-      const newPartData = {
-        ...data,
-        imageUrl: data.imageUrl || "https://placehold.co/600x400",
-        tax,
-        exFactPrice,
-      };
-
-      await setDoc(doc(db, "parts", newPartId), newPartData);
+                const newPartData: Omit<Part, 'id'> = {
+                    name: item.name,
+                    partNumber: item.partNumber,
+                    partCode: item.partNumber, // Default part code
+                    description: '', // Can be added later
+                    price: item.price,
+                    stock: item.quantity,
+                    taxable: true,
+                    tax,
+                    exFactPrice,
+                    brand: '',
+                    category: '',
+                    equipmentModel: '',
+                    imageUrl: "https://placehold.co/600x400",
+                };
+                const partRef = doc(db, "parts", newPartId);
+                batch.set(partRef, newPartData);
+            } else if (item.partId) {
+                // Update stock for an existing part
+                const partRef = doc(db, "parts", item.partId);
+                batch.update(partRef, {
+                    stock: increment(item.quantity)
+                });
+            }
+        }
+      
+      await batch.commit();
       
       toast({
-        title: "Part Added",
-        description: `${data.name} has been successfully added to the inventory.`,
+        title: "Inventory Updated",
+        description: `Successfully updated stock from invoice.`,
       });
       
       form.reset();
       setIsDialogOpen(false);
       fetchParts(); // Refresh the list
     } catch (error) {
-      console.error("Error saving part:", error);
+      console.error("Error saving invoice:", error);
       toast({
         variant: "destructive",
         title: "Save Failed",
-        description: "Could not save the new part. Please try again.",
+        description: "Could not update inventory. Please try again.",
       });
     } finally {
       setIsSaving(false);
     }
   }
+  
+  const addNewItem = () => {
+    append({ partId: "", name: "", partNumber: "", price: 0, quantity: 1, isNew: false });
+  };
+
 
   const handleExport = () => {
     const csvData = Papa.unparse(parts.map(p => ({
@@ -283,86 +346,95 @@ export default function InventoryPage() {
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
                 <Button>
-                <PlusCircle className="mr-2 h-4 w-4" /> Add New Part
+                <PlusCircle className="mr-2 h-4 w-4" /> Add New Tax Invoice
                 </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[600px]">
+            <DialogContent className="sm:max-w-4xl">
                 <DialogHeader>
-                <DialogTitle>Add New Part</DialogTitle>
+                <DialogTitle>Add New Tax Invoice</DialogTitle>
                 <DialogDescription>
-                    Enter the details for the new product. Click save when you're done.
+                    Record a new tax invoice from a supplier to add or update stock.
                 </DialogDescription>
                 </DialogHeader>
-                <form onSubmit={form.handleSubmit(onSubmit)} id="add-part-form">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-4 max-h-[60vh] overflow-y-auto px-1">
-                    <div className="space-y-2">
-                    <Label htmlFor="name">Part Name</Label>
-                    <Input id="name" {...form.register("name")} />
-                    {form.formState.errors.name && <p className="text-destructive text-xs">{form.formState.errors.name.message}</p>}
+                <form onSubmit={form.handleSubmit(onSubmit)} id="tax-invoice-form">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-4">
+                        <div>
+                            <Label htmlFor="supplierName">Supplier Name</Label>
+                            <Input id="supplierName" {...form.register("supplierName")} />
+                            {form.formState.errors.supplierName && <p className="text-destructive text-xs">{form.formState.errors.supplierName.message}</p>}
+                        </div>
+                        <div>
+                            <Label htmlFor="invoiceNumber">Supplier Invoice Number (Optional)</Label>
+                            <Input id="invoiceNumber" {...form.register("invoiceNumber")} />
+                        </div>
                     </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="partNumber">Part Number</Label>
-                    <Input id="partNumber" {...form.register("partNumber")} />
-                    {form.formState.errors.partNumber && <p className="text-destructive text-xs">{form.formState.errors.partNumber.message}</p>}
+                    <div className="max-h-[40vh] overflow-y-auto pr-2">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="w-[35%]">Part</TableHead>
+                                    <TableHead>Part Number</TableHead>
+                                    <TableHead>Cost Price</TableHead>
+                                    <TableHead>Quantity</TableHead>
+                                    <TableHead></TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {fields.map((field, index) => {
+                                    const currentItem = form.watch(`items.${index}`);
+                                    return (
+                                        <TableRow key={field.id}>
+                                            <TableCell>
+                                                {currentItem.isNew ? (
+                                                    <Input placeholder="New Part Name" {...form.register(`items.${index}.name`)} />
+                                                ) : (
+                                                    <Combobox
+                                                        options={partOptions}
+                                                        value={field.partId}
+                                                        onChange={(value) => handlePartSelection(index, value)}
+                                                        placeholder="Select a part..."
+                                                        searchPlaceholder="Search parts..."
+                                                        emptyPlaceholder="No parts found."
+                                                    />
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Input placeholder="Part Number" {...form.register(`items.${index}.partNumber`)} disabled={!currentItem.isNew} />
+                                            </TableCell>
+                                            <TableCell>
+                                                <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} disabled={!currentItem.isNew} />
+                                            </TableCell>
+                                            <TableCell>
+                                                <Input type="number" {...form.register(`items.${index}.quantity`)} />
+                                            </TableCell>
+                                            <TableCell>
+                                                <Button variant="ghost" size="icon" onClick={() => remove(index)}>
+                                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                                </Button>
+                                            </TableCell>
+                                        </TableRow>
+                                    )
+                                })}
+                            </TableBody>
+                        </Table>
                     </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="partCode">Part Code</Label>
-                    <Input id="partCode" {...form.register("partCode")} />
-                    {form.formState.errors.partCode && <p className="text-destructive text-xs">{form.formState.errors.partCode.message}</p>}
-                    </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="stock">Stock Quantity</Label>
-                    <Input id="stock" type="number" {...form.register("stock")} />
-                    {form.formState.errors.stock && <p className="text-destructive text-xs">{form.formState.errors.stock.message}</p>}
-                    </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="price">Base Price (GH₵)</Label>
-                    <Input id="price" type="number" step="0.01" {...form.register("price")} />
-                    {form.formState.errors.price && <p className="text-destructive text-xs">{form.formState.errors.price.message}</p>}
-                    </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="brand">Brand</Label>
-                    <Input id="brand" {...form.register("brand")} />
-                    </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="category">Category</Label>
-                    <Input id="category" {...form.register("category")} />
-                    </div>
-                    <div className="space-y-2">
-                    <Label htmlFor="equipmentModel">Equipment Model</Label>
-                    <Input id="equipmentModel" {...form.register("equipmentModel")} />
-                    </div>
-                    <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="description">Description</Label>
-                    <Textarea id="description" {...form.register("description")} />
-                    </div>
-                    <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="imageUrl">Image URL</Label>
-                    <Input id="imageUrl" placeholder="https://..." {...form.register("imageUrl")} />
-                    {form.formState.errors.imageUrl && <p className="text-destructive text-xs">{form.formState.errors.imageUrl.message}</p>}
-                    </div>
-                    <div className="flex items-center space-x-2 md:col-span-2">
-                        <Controller
-                            control={form.control}
-                            name="taxable"
-                            render={({ field }) => (
-                            <Switch
-                                id="taxable"
-                                checked={field.value}
-                                onCheckedChange={field.onChange}
-                                />
-                            )}
-                        />
-                    <Label htmlFor="taxable">This item is taxable</Label>
-                    </div>
-                </div>
+                     <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-4"
+                        onClick={addNewItem}
+                        >
+                        <PlusCircle className="mr-2 h-4 w-4" />
+                        Add Item
+                    </Button>
                 </form>
                 <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" form="add-part-form" disabled={isSaving}>
-                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Save Part
-                </Button>
+                    <Button variant="outline" onClick={() => { setIsDialogOpen(false); form.reset(); }}>Cancel</Button>
+                    <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
+                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Save Invoice & Update Stock
+                    </Button>
                 </DialogFooter>
             </DialogContent>
             </Dialog>
@@ -413,3 +485,5 @@ export default function InventoryPage() {
     </div>
   );
 }
+
+    

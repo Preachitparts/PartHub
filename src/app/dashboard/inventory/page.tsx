@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import {
   Dialog,
+  DialogTrigger,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -516,5 +517,3 @@ export default function InventoryPage() {
     </div>
   );
 }
-
-    

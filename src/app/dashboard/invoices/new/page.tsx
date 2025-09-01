@@ -172,7 +172,7 @@ export default function NewInvoicePage() {
       0
     );
     const total = subtotal + taxAmount;
-    const balanceDue = total - (watchPaidAmount || 0);
+    const balanceDue = subtotal - (watchPaidAmount || 0);
     
     // Set form values for submission
     invoiceForm.setValue("subtotal", subtotal);

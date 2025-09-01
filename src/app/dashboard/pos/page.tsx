@@ -195,7 +195,7 @@ export default function POSPage() {
     const subtotal = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
     const taxAmount = cart.reduce((acc, item) => acc + item.saleTax * item.quantity, 0);
     const total = subtotal + taxAmount;
-    const balanceDue = total - paidAmount;
+    const balanceDue = subtotal - paidAmount;
     return { subtotal, taxAmount, total, balanceDue };
   }, [cart, paidAmount]);
 
@@ -263,7 +263,7 @@ export default function POSPage() {
             }
 
             const invoiceRef = doc(db, "invoices", invoiceNumber);
-            const finalBalanceDue = total - paidAmount;
+            const finalBalanceDue = subtotal - paidAmount;
             const status = finalBalanceDue <= 0 ? 'Paid' : 'Unpaid';
             const invoiceToSave: Omit<Invoice, 'id'> = {
                 invoiceNumber: invoiceNumber,

@@ -248,7 +248,7 @@ export default function PriceManagementPage() {
                             </div>
                             <div className="flex items-center space-x-2">
                                 <RadioGroupItem value="inclusive" id={`${part.id}-inclusive`} />
-                                <Label htmlFor={`${partid}-inclusive`}>Inclusive</Label>
+                                <Label htmlFor={`${part.id}-inclusive`}>Inclusive</Label>
                             </div>
                          </RadioGroup>
                       </TableCell>

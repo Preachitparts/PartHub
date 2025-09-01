@@ -28,6 +28,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogClose,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,7 +66,9 @@ export default function InventoryPage() {
   const [taxInvoices, setTaxInvoices] = useState<TaxInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoice | null>(null);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -226,7 +229,7 @@ export default function InventoryPage() {
         });
       
         form.reset();
-        setIsDialogOpen(false);
+        setIsAddDialogOpen(false);
         fetchData(); // Refresh both parts and invoices list
     } catch (error) {
       console.error("Error saving invoice:", error);
@@ -244,6 +247,10 @@ export default function InventoryPage() {
     append({ partId: "", name: "", partNumber: "", price: 0, quantity: 1, isNew: false });
   };
 
+  const handleViewInvoice = (invoice: TaxInvoice) => {
+    setSelectedInvoice(invoice);
+    setIsViewDialogOpen(true);
+  };
 
   const handleExport = () => {
     const csvData = Papa.unparse(taxInvoices.map(inv => ({
@@ -398,7 +405,7 @@ export default function InventoryPage() {
             <Button variant="outline" onClick={handleExport} disabled={taxInvoices.length === 0}>
                 <Download className="mr-2 h-4 w-4" /> Export Invoices CSV
             </Button>
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
                 <Button>
                 <PlusCircle className="mr-2 h-4 w-4" /> Add New Tax Invoice
@@ -489,7 +496,7 @@ export default function InventoryPage() {
                     </div>
                 </form>
                 <DialogFooter className="mt-4">
-                    <Button variant="outline" onClick={() => { setIsDialogOpen(false); form.reset(); }}>Cancel</Button>
+                    <Button variant="outline" onClick={() => { setIsAddDialogOpen(false); form.reset(); }}>Cancel</Button>
                     <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
                         {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                         Save Invoice & Update Stock
@@ -532,7 +539,7 @@ export default function InventoryPage() {
                       GH₵{invoice.totalAmount.toFixed(2)}
                     </TableCell>
                     <TableCell>
-                       <Button variant="ghost" size="icon">
+                       <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
                             <Eye className="h-4 w-4" />
                        </Button>
                     </TableCell>
@@ -547,8 +554,74 @@ export default function InventoryPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Invoice Details</DialogTitle>
+            <DialogDescription>
+              Viewing details for invoice {selectedInvoice?.invoiceId}.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedInvoice && (
+            <div className="grid gap-4 py-4">
+                <div className="grid grid-cols-3 gap-4">
+                    <div>
+                        <Label className="font-semibold">Supplier Name</Label>
+                        <p>{selectedInvoice.supplierName}</p>
+                    </div>
+                     <div>
+                        <Label className="font-semibold">Supplier Invoice No.</Label>
+                        <p>{selectedInvoice.supplierInvoiceNumber || 'N/A'}</p>
+                    </div>
+                     <div>
+                        <Label className="font-semibold">Date</Label>
+                        <p>{selectedInvoice.date.toDate().toLocaleDateString()}</p>
+                    </div>
+                </div>
+                <div className="mt-4">
+                     <Label className="font-semibold">Items</Label>
+                     <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Product Name</TableHead>
+                                <TableHead>Part Number</TableHead>
+                                <TableHead className="text-right">Price</TableHead>
+                                <TableHead className="text-right">Quantity</TableHead>
+                                <TableHead className="text-right">Total</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {selectedInvoice.items.map((item, index) => (
+                                <TableRow key={index}>
+                                    <TableCell>{item.name}</TableCell>
+                                    <TableCell>{item.partNumber}</TableCell>
+                                    <TableCell className="text-right">GH₵{item.price.toFixed(2)}</TableCell>
+                                    <TableCell className="text-right">{item.quantity}</TableCell>
+                                    <TableCell className="text-right">GH₵{(item.price * item.quantity).toFixed(2)}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                     </Table>
+                </div>
+                 <div className="flex justify-end mt-4">
+                    <div className="w-full max-w-xs space-y-2">
+                        <div className="flex justify-between font-bold text-lg">
+                            <span>Total Invoice Amount</span>
+                            <span>GH₵{selectedInvoice.totalAmount.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+                <Button variant="outline">Close</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
-
-    

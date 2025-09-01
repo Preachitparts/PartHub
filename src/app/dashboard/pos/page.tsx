@@ -2,9 +2,9 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { Part } from "@/types";
+import type { Part, Invoice } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -29,9 +29,13 @@ import {
   Trash2,
   Loader2,
   MinusCircle,
+  FileText,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { logActivity } from "@/lib/activity-log";
+import { Label } from "@/components/ui/label";
 
 interface CartItem extends Part {
   quantity: number;
@@ -40,9 +44,15 @@ interface CartItem extends Part {
 export default function POSPage() {
   const [parts, setParts] = useState<Part[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerAddress, setCustomerAddress] = useState("");
+
   const { toast } = useToast();
+  const router = useRouter();
 
   useEffect(() => {
     const fetchParts = async () => {
@@ -142,7 +152,94 @@ export default function POSPage() {
     const taxAmount = cart.reduce((acc, item) => acc + item.tax * item.quantity, 0);
     const total = subtotal + taxAmount;
     return { subtotal, taxAmount, total };
-  }, [cart])
+  }, [cart]);
+
+  const handleCompleteSale = async () => {
+    if (cart.length === 0) {
+        toast({ variant: "destructive", title: "Cart is empty", description: "Add items to the cart to complete a sale." });
+        return;
+    }
+    if (!customerName) {
+        toast({ variant: "destructive", title: "Customer Name Required", description: "Please enter a customer name." });
+        return;
+    }
+
+    setIsSaving(true);
+    const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
+
+    try {
+        await runTransaction(db, async (transaction) => {
+            // 1. Check stock for all items
+            for (const item of cart) {
+                const partRef = doc(db, "parts", item.id);
+                const partDoc = await transaction.get(partRef);
+                if (!partDoc.exists()) {
+                    throw new Error(`Part ${item.name} not found.`);
+                }
+                const currentStock = partDoc.data().stock;
+                if (currentStock < item.quantity) {
+                    throw new Error(`Not enough stock for ${item.name}. Available: ${currentStock}, Requested: ${item.quantity}`);
+                }
+            }
+
+            // 2. Decrement stock for all items
+            for (const item of cart) {
+                const partRef = doc(db, "parts", item.id);
+                transaction.update(partRef, { stock: increment(-item.quantity) });
+            }
+
+            // 3. Create and save the invoice
+            const invoiceRef = doc(db, "invoices", invoiceNumber);
+            const invoiceToSave: Omit<Invoice, 'id'> = {
+                invoiceNumber: invoiceNumber,
+                customerName: customerName,
+                customerAddress: customerAddress || '',
+                customerPhone: customerPhone || '',
+                invoiceDate: new Date().toISOString().split("T")[0],
+                items: cart.map(i => ({
+                    partId: i.id,
+                    partName: i.name,
+                    partNumber: i.partNumber,
+                    quantity: i.quantity,
+                    unitPrice: i.price,
+                    tax: i.tax,
+                    total: i.exFactPrice * i.quantity,
+                })),
+                subtotal: subtotal,
+                tax: taxAmount,
+                total: total,
+            };
+            transaction.set(invoiceRef, invoiceToSave);
+        });
+
+        await logActivity(`Completed sale for invoice ${invoiceNumber} to ${customerName}.`);
+
+        toast({
+            title: "Sale Complete!",
+            description: `Invoice ${invoiceNumber} created and stock updated.`,
+        });
+
+        // Reset state
+        setCart([]);
+        setCustomerName("");
+        setCustomerPhone("");
+        setCustomerAddress("");
+        setSearchTerm("");
+        
+        // Redirect to invoices page
+        router.push('/dashboard/invoices');
+
+    } catch (error: any) {
+        console.error("Error completing sale:", error);
+        toast({
+            variant: "destructive",
+            title: "Sale Failed",
+            description: error.message || "An unexpected error occurred. Stock has not been updated.",
+        });
+    } finally {
+        setIsSaving(false);
+    }
+  };
 
 
   return (
@@ -222,8 +319,21 @@ export default function POSPage() {
           <CardHeader>
             <CardTitle>Current Sale</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="h-80 overflow-auto">
+          <CardContent className="flex flex-col gap-4">
+            <div className="space-y-2">
+                <Label htmlFor="customerName">Customer Name</Label>
+                <Input id="customerName" placeholder="John Doe" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+            </div>
+             <div className="space-y-2">
+                <Label htmlFor="customerPhone">Customer Phone</Label>
+                <Input id="customerPhone" placeholder="024 123 4567" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
+            </div>
+             <div className="space-y-2">
+                <Label htmlFor="customerAddress">Customer Address (Optional)</Label>
+                <Input id="customerAddress" placeholder="123 Main St, Accra" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
+            </div>
+
+            <div className="h-60 overflow-auto border rounded-md">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -238,7 +348,7 @@ export default function POSPage() {
                     <TableRow>
                       <TableCell
                         colSpan={4}
-                        className="text-center text-muted-foreground"
+                        className="text-center text-muted-foreground py-4"
                       >
                         Cart is empty
                       </TableCell>
@@ -246,13 +356,13 @@ export default function POSPage() {
                   ) : (
                     cart.map((item) => (
                       <TableRow key={item.id}>
-                        <TableCell className="font-medium line-clamp-2">{item.name}</TableCell>
+                        <TableCell className="font-medium line-clamp-2 pr-1">{item.name}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateQuantity(item.id, item.quantity - 1)}>
                                 <MinusCircle className="h-4 w-4"/>
                              </Button>
-                             <span>{item.quantity}</span>
+                             <span className="w-4 text-center">{item.quantity}</span>
                               <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateQuantity(item.id, item.quantity + 1)}>
                                 <PlusCircle className="h-4 w-4"/>
                              </Button>
@@ -277,7 +387,7 @@ export default function POSPage() {
                 </TableBody>
               </Table>
             </div>
-            <div className="mt-4 space-y-2 text-sm">
+            <div className="mt-2 space-y-2 text-sm">
               <div className="flex justify-between">
                 <span>Subtotal</span>
                 <span>GH₵{subtotal.toFixed(2)}</span>
@@ -293,8 +403,9 @@ export default function POSPage() {
             </div>
           </CardContent>
           <CardFooter>
-            <Button className="w-full" size="lg" disabled={cart.length === 0}>
-              Complete Sale
+            <Button className="w-full" size="lg" disabled={isSaving || cart.length === 0} onClick={handleCompleteSale}>
+              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+              {isSaving ? "Processing..." : "Complete Sale & Create Invoice"}
             </Button>
           </CardFooter>
         </Card>
@@ -302,3 +413,5 @@ export default function POSPage() {
     </div>
   );
 }
+
+    

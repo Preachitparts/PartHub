@@ -308,14 +308,14 @@ export default function InvoicesPage() {
                             </div>
                              <div>
                                 <Label className="font-semibold">Status</Label>
-                                <p>
+                                <div>
                                      <Badge variant={
                                         selectedInvoice.status === 'Paid' ? 'secondary' : 
                                         selectedInvoice.status === 'Overdue' ? 'destructive' : 'default'
                                     } className={cn(selectedInvoice.status === 'Unpaid' && 'bg-amber-500 text-white')}>
                                         {selectedInvoice.status}
                                     </Badge>
-                                </p>
+                                </div>
                             </div>
                             <div className="md:col-span-3">
                                 <Label className="font-semibold">Customer Address</Label>
@@ -389,4 +389,3 @@ export default function InvoicesPage() {
 
         </div>
     )
-}

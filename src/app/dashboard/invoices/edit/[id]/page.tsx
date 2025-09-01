@@ -147,9 +147,9 @@ export default function EditInvoicePage() {
       0
     );
     const total = subtotal + taxAmount;
-    const balanceDue = total - (watchPaidAmount || 0);
+    const balanceDueValue = total - (watchPaidAmount || 0);
     
-    return { subtotal, taxAmount, total, balanceDue };
+    return { subtotal, taxAmount, total, balanceDue: balanceDueValue };
   }, [watchItems, watchPaidAmount]);
 
   const handlePartChange = (index: number, partId: string) => {
@@ -209,42 +209,54 @@ export default function EditInvoicePage() {
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-            
-            const partIdToQuantityMap = new Map<string, number>();
 
+            // Calculate stock changes
+            const stockChanges = new Map<string, number>();
+
+            // Add back original quantities
             originalInvoice.items.forEach(item => {
-                partIdToQuantityMap.set(item.partId, (partIdToQuantityMap.get(item.partId) || 0) - item.quantity);
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
             });
 
+            // Subtract new quantities
             data.items.forEach(item => {
-                partIdToQuantityMap.set(item.partId, (partIdToQuantityMap.get(item.partId) || 0) + item.quantity);
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
             });
-            
-            const partRefs = Array.from(partIdToQuantityMap.keys()).map(partId => doc(db, "parts", partId));
+
+            // Fetch all parts involved
+            const partIds = Array.from(stockChanges.keys());
+            const partRefs = partIds.map(id => doc(db, "parts", id));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
-            const partsData = new Map(partDocs.map(p => [p.id, p.data() as Part]));
-            
-            for(const [partId, quantityChange] of partIdToQuantityMap.entries()) {
-                const partData = partsData.get(partId);
-                const originalItem = originalInvoice.items.find(i => i.partId === partId);
-                const originalStock = partData?.stock ?? 0;
-                const originalInvoiceQuantity = originalItem?.quantity ?? 0;
 
-                const stockAfterRevert = originalStock + originalInvoiceQuantity;
-                const newInvoiceQuantity = data.items.find(i => i.partId === partId)?.quantity ?? 0;
+            const partMap = new Map<string, Part>();
+            partDocs.forEach(partDoc => {
+                if(partDoc.exists()) {
+                    partMap.set(partDoc.id, { id: partDoc.id, ...partDoc.data() } as Part);
+                }
+            });
 
-                if (stockAfterRevert < newInvoiceQuantity) {
-                    throw new Error(`Not enough stock for ${partData?.name || 'a part'}. Available: ${stockAfterRevert}, requested: ${newInvoiceQuantity}`);
+            // Validate stock levels before writing
+            for (const [partId, change] of stockChanges.entries()) {
+                const part = partMap.get(partId);
+                if (part) {
+                    const newStock = part.stock + change;
+                    if (newStock < 0) {
+                        throw new Error(`Not enough stock for ${part.name}. Required: ${-change + part.stock}, Available: ${part.stock}`);
+                    }
+                } else if (change < 0) { // Item added that doesn't exist
+                    throw new Error(`Part with ID ${partId} not found.`);
                 }
             }
 
-            for (const [partId, quantityChange] of partIdToQuantityMap.entries()) {
-                if (quantityChange !== 0) {
+            // Apply stock changes
+            for (const [partId, change] of stockChanges.entries()) {
+                if (change !== 0) {
                     const partRef = doc(db, "parts", partId);
-                    transaction.update(partRef, { stock: increment(-quantityChange) });
+                    transaction.update(partRef, { stock: increment(change) });
                 }
             }
-
+            
+            // Update invoice
             const newTotal = data.items.reduce((acc, item) => acc + item.total, 0);
             const newBalanceDue = newTotal - data.paidAmount;
             const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
@@ -492,3 +504,5 @@ export default function EditInvoicePage() {
     </>
   );
 }
+
+    

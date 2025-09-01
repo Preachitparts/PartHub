@@ -94,9 +94,9 @@ export default function InvoicesPage() {
                 item.partName,
                 item.partNumber,
                 item.quantity,
-                `GH₵${item.unitPrice.toFixed(2)}`,
-                `GH₵${item.tax.toFixed(2)}`,
-                `GH₵${item.total.toFixed(2)}`
+                `GHS ${item.unitPrice.toFixed(2)}`,
+                `GHS ${item.tax.toFixed(2)}`,
+                `GHS ${item.total.toFixed(2)}`
             ];
             tableRows.push(itemData);
         });
@@ -111,11 +111,11 @@ export default function InvoicesPage() {
         // Totals
         const finalY = doc.autoTable.previous.finalY;
         doc.setFontSize(10);
-        doc.text(`Subtotal: GH₵${invoice.subtotal.toFixed(2)}`, 140, finalY + 10);
-        doc.text(`Tax: GH₵${invoice.tax.toFixed(2)}`, 140, finalY + 15);
+        doc.text(`Subtotal: GHS ${invoice.subtotal.toFixed(2)}`, 140, finalY + 10);
+        doc.text(`Tax: GHS ${invoice.tax.toFixed(2)}`, 140, finalY + 15);
         doc.setFontSize(12);
         doc.setFont('bold');
-        doc.text(`Total: GH₵${invoice.total.toFixed(2)}`, 140, finalY + 22);
+        doc.text(`Total: GHS ${invoice.total.toFixed(2)}`, 140, finalY + 22);
         doc.setFont('normal');
 
         // Footer

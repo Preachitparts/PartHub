@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useAuth } from "@/components/providers/auth-provider";
@@ -71,44 +72,44 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <SidebarContent>
           <SidebarMenu>
             <SidebarMenuItem>
-              <Button asChild variant="ghost" className="w-full justify-start gap-2" >
+              <SidebarMenuButton asChild isActive={pathname === '/dashboard'}>
                 <Link href="/dashboard">
                   <LayoutGrid />
                   Dashboard
                 </Link>
-              </Button>
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+              <SidebarMenuButton asChild isActive={pathname === '/dashboard/pos'}>
                 <Link href="/dashboard/pos">
                   <ShoppingCart />
                   Point of Sale
                 </Link>
-              </Button>
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+              <SidebarMenuButton asChild isActive={pathname.startsWith('/dashboard/invoices')}>
                 <Link href="/dashboard/invoices">
                   <FileText />
                   Invoices
                 </Link>
-              </Button>
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+              <SidebarMenuButton asChild isActive={pathname === '/dashboard/inventory'}>
                 <Link href="/dashboard/inventory">
                   <Wrench />
                   Inventory
                 </Link>
-              </Button>
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+              <SidebarMenuButton asChild isActive={pathname === '/dashboard/settings'}>
                 <Link href="/dashboard/settings">
                   <Settings />
                   Settings
                 </Link>
-              </Button>
+              </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarContent>

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Loader2, Save } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Part } from "@/types";
@@ -29,6 +30,7 @@ import { logActivity } from "@/lib/activity-log";
 
 interface EditablePart extends Part {
   newPrice?: number;
+  newPricingType?: 'inclusive' | 'exclusive';
 }
 
 export default function PriceManagementPage() {
@@ -79,45 +81,75 @@ export default function PriceManagementPage() {
       )
     );
   };
+  
+  const handlePricingTypeChange = (partId: string, newPricingType: 'inclusive' | 'exclusive') => {
+    setParts((prevParts) =>
+      prevParts.map((part) =>
+        part.id === partId ? { ...part, newPricingType: newPricingType } : part
+      )
+    );
+  };
 
   const handleSaveChanges = async () => {
     setIsSaving(true);
     try {
         const batch = writeBatch(db);
-        const partsToUpdate = parts.filter(p => p.newPrice !== undefined && p.newPrice !== p.price);
         let updatedPricesCount = 0;
 
-        // Save the new tax rate and recalculate all part taxes
+        // Save the new tax rate
         const taxDocRef = doc(db, "internal", "seeding_flag");
         await updateDoc(taxDocRef, { taxRate: taxRate });
         await logActivity(`Updated global tax rate to ${taxRate * 100}%.`);
 
-        const allParts = await getDocs(collection(db, "parts"));
-        allParts.forEach(docSnap => {
-            const part = docSnap.data() as Part;
-            const partRef = doc(db, "parts", docSnap.id);
+        for (const part of parts) {
+            const partRef = doc(db, "parts", part.id);
+            let hasUpdate = false;
+
+            const newPrice = part.newPrice;
+            const newPricingType = part.newPricingType || part.pricingType;
             let currentPrice = part.price;
-            
-            // Check if this part has a pending price update
-            const pendingUpdate = partsToUpdate.find(p => p.id === docSnap.id);
-            if (pendingUpdate && pendingUpdate.newPrice !== undefined) {
-                currentPrice = pendingUpdate.newPrice;
-                batch.update(partRef, {
-                    price: currentPrice,
-                    previousPrice: part.price,
-                });
+            let updates: Partial<Part> = {};
+
+            if (newPrice !== undefined && newPrice !== part.price) {
+                updates.price = newPrice;
+                updates.previousPrice = part.price;
+                currentPrice = newPrice;
+                hasUpdate = true;
                 updatedPricesCount++;
-                logActivity(`Updated price for ${part.name} from GH₵${part.price.toFixed(2)} to GH₵${currentPrice.toFixed(2)}.`);
+                logActivity(`Updated price for ${part.name} from GH₵${part.price.toFixed(2)} to GH₵${newPrice.toFixed(2)}.`);
             }
 
-            const taxAmount = part.taxable ? currentPrice * taxRate : 0;
-            const exFactPrice = currentPrice + taxAmount;
+            if (newPricingType !== part.pricingType) {
+                 updates.pricingType = newPricingType;
+                 hasUpdate = true;
+            }
 
-            batch.update(partRef, {
-                tax: taxAmount,
-                exFactPrice: exFactPrice,
-            });
-        });
+            // Recalculate tax if price, pricing type, or global tax rate changed
+            let basePrice = newPrice ?? part.price;
+            let taxAmount = 0;
+            let exFactPrice = 0;
+
+            if (part.taxable) {
+                if (newPricingType === 'inclusive') {
+                    basePrice = (newPrice ?? part.price) / (1 + taxRate);
+                    taxAmount = (newPrice ?? part.price) - basePrice;
+                    exFactPrice = newPrice ?? part.price;
+                } else { // exclusive
+                    basePrice = newPrice ?? part.price;
+                    taxAmount = basePrice * taxRate;
+                    exFactPrice = basePrice + taxAmount;
+                }
+            } else {
+                 basePrice = newPrice ?? part.price;
+                 exFactPrice = basePrice;
+            }
+             
+            updates.price = parseFloat(basePrice.toFixed(4));
+            updates.tax = parseFloat(taxAmount.toFixed(4));
+            updates.exFactPrice = parseFloat(exFactPrice.toFixed(4));
+             
+            batch.update(partRef, updates);
+        }
 
       await batch.commit();
 
@@ -174,7 +206,7 @@ export default function PriceManagementPage() {
         <CardHeader>
           <CardTitle>Part Prices</CardTitle>
           <CardDescription>
-            Update the base price for individual parts. The tax and final price will be recalculated automatically on save.
+            Update the price for individual parts. The `price` in the database will be the **tax-exclusive** price.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -190,8 +222,9 @@ export default function PriceManagementPage() {
                     <TableHead className="w-[30%]">Part Name</TableHead>
                     <TableHead>Part Number</TableHead>
                     <TableHead className="text-right">Previous Price</TableHead>
-                    <TableHead className="text-right">Current Base Price</TableHead>
-                    <TableHead className="w-[150px] text-right">New Base Price</TableHead>
+                    <TableHead className="w-[200px]">Pricing Type</TableHead>
+                    <TableHead className="w-[150px] text-right">New Price</TableHead>
+                    <TableHead className="text-right">Ex-Fact. Price</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -202,17 +235,36 @@ export default function PriceManagementPage() {
                       <TableCell className="text-right text-muted-foreground">
                         {part.previousPrice ? `GH₵${part.previousPrice.toFixed(2)}` : 'N/A'}
                       </TableCell>
-                      <TableCell className="text-right">GH₵{part.price.toFixed(2)}</TableCell>
+                       <TableCell>
+                         <RadioGroup
+                            defaultValue={part.pricingType}
+                            value={part.newPricingType || part.pricingType}
+                            onValueChange={(value: 'inclusive' | 'exclusive') => handlePricingTypeChange(part.id, value)}
+                            className="flex gap-4"
+                          >
+                            <div className="flex items-center space-x-2">
+                                <RadioGroupItem value="exclusive" id={`${part.id}-exclusive`} />
+                                <Label htmlFor={`${part.id}-exclusive`}>Exclusive</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <RadioGroupItem value="inclusive" id={`${part.id}-inclusive`} />
+                                <Label htmlFor={`${partid}-inclusive`}>Inclusive</Label>
+                            </div>
+                         </RadioGroup>
+                      </TableCell>
                       <TableCell className="text-right">
                         <Input
                           type="number"
                           step="0.01"
-                          placeholder={part.price.toFixed(2)}
+                          placeholder={
+                            part.pricingType === 'inclusive' ? part.exFactPrice.toFixed(2) : part.price.toFixed(2)
+                          }
                           value={part.newPrice ?? ''}
                           onChange={(e) => handlePriceChange(part.id, e.target.value)}
                           className="text-right"
                         />
                       </TableCell>
+                       <TableCell className="text-right font-semibold">GH₵{part.exFactPrice.toFixed(2)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

@@ -9,6 +9,7 @@ export interface Part {
   description: string;
   price: number; // This will be treated as the base price
   previousPrice?: number; // To store the last price
+  pricingType: 'inclusive' | 'exclusive';
   tax: number;
   exFactPrice: number;
   taxable: boolean;

@@ -5,10 +5,10 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, setDoc } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import type { Part } from "@/types";
+import type { Part, Invoice, InvoiceItem } from "@/types";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -28,13 +28,6 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
@@ -57,9 +50,12 @@ import { Combobox } from "@/components/ui/combobox";
 
 const invoiceItemSchema = z.object({
   partId: z.string().min(1, "Please select a part."),
+  partName: z.string(),
+  partNumber: z.string(),
   quantity: z.number().min(1, "Quantity must be at least 1."),
-  unitPrice: z.number(),
-  total: z.number(),
+  unitPrice: z.number(), // The price before tax
+  tax: z.number(),
+  total: z.number(), // The price after tax (exFactPrice * quantity)
 });
 
 const invoiceSchema = z.object({
@@ -131,13 +127,10 @@ export default function NewInvoicePage() {
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 0),
       0
     );
-    const taxAmount = watchItems.reduce((acc, item) => {
-      const part = parts.find((p) => p.id === item.partId);
-      if (part) {
-        return acc + (part.tax || 0) * (item.quantity || 0);
-      }
-      return acc;
-    }, 0);
+    const taxAmount = watchItems.reduce(
+      (acc, item) => acc + (item.tax || 0) * (item.quantity || 0),
+      0
+    );
     const total = subtotal + taxAmount;
     
     // Set form values for submission
@@ -146,15 +139,18 @@ export default function NewInvoicePage() {
     form.setValue("total", total);
     
     return { subtotal, taxAmount, total };
-  }, [watchItems, parts, form]);
+  }, [watchItems, form]);
 
   const handlePartChange = (index: number, partId: string) => {
     const selectedPart = parts.find((p) => p.id === partId);
     if (selectedPart) {
       update(index, {
         partId: selectedPart.id,
+        partName: selectedPart.name,
+        partNumber: selectedPart.partNumber,
         quantity: 1,
         unitPrice: selectedPart.price,
+        tax: selectedPart.tax,
         total: selectedPart.exFactPrice,
       });
     }
@@ -173,32 +169,76 @@ export default function NewInvoicePage() {
      }
 
      if(quantity < 1) quantity = 1;
-
-     const total = (item.unitPrice || 0) * quantity;
+     
+     const partPrice = selectedPart?.exFactPrice || 0;
+     const total = partPrice * quantity;
      update(index, { ...item, quantity, total });
   };
 
   const addNewItem = () => {
-    append({ partId: "", quantity: 1, unitPrice: 0, total: 0 });
+    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, partName: '', partNumber: '' });
   };
 
   async function onSubmit(data: InvoiceFormValues) {
     setIsSaving(true);
     try {
-      // Here you would typically reduce the stock in the 'parts' collection
-      // For this example, we'll just save the invoice
-      await setDoc(doc(db, "invoices", data.invoiceNumber), data);
+        await runTransaction(db, async (transaction) => {
+            const invoiceRef = doc(db, "invoices", data.invoiceNumber);
+
+            // 1. Check stock for all items
+            for (const item of data.items) {
+                const partRef = doc(db, "parts", item.partId);
+                const partDoc = await transaction.get(partRef);
+                if (!partDoc.exists()) {
+                    throw new Error(`Part ${item.partName} not found.`);
+                }
+                const currentStock = partDoc.data().stock;
+                if (currentStock < item.quantity) {
+                    throw new Error(`Not enough stock for ${item.partName}. Available: ${currentStock}, Requested: ${item.quantity}`);
+                }
+            }
+
+            // 2. Decrement stock for all items
+            for (const item of data.items) {
+                const partRef = doc(db, "parts", item.partId);
+                transaction.update(partRef, { stock: -item.quantity });
+            }
+
+            // 3. Save the invoice
+            const invoiceToSave: Omit<Invoice, 'id' | 'date'> = {
+                invoiceNumber: data.invoiceNumber,
+                customerName: data.customerName,
+                customerAddress: data.customerAddress || '',
+                customerPhone: data.customerPhone || '',
+                invoiceDate: data.invoiceDate,
+                items: data.items.map(i => ({
+                    partId: i.partId,
+                    partName: i.partName,
+                    partNumber: i.partNumber,
+                    quantity: i.quantity,
+                    unitPrice: i.unitPrice,
+                    tax: i.tax,
+                    total: i.total,
+                })),
+                subtotal: data.subtotal,
+                tax: data.tax,
+                total: data.total,
+            };
+            transaction.set(invoiceRef, invoiceToSave);
+        });
+
       toast({
         title: "Invoice Saved",
-        description: `Invoice ${data.invoiceNumber} has been successfully saved.`,
+        description: `Invoice ${data.invoiceNumber} has been successfully saved and stock updated.`,
       });
       router.push("/dashboard/invoices");
-    } catch (error) {
+
+    } catch (error: any) {
       console.error("Error saving invoice:", error);
       toast({
         variant: "destructive",
         title: "Save Failed",
-        description: "Could not save the invoice. Please try again.",
+        description: error.message || "Could not save the invoice. Please try again.",
       });
     } finally {
       setIsSaving(false);
@@ -258,7 +298,7 @@ export default function NewInvoicePage() {
                  </div>
                  <div className="grid w-full max-w-sm items-center gap-1.5">
                     <FormLabel>Date</FormLabel>
-                    <Input disabled defaultValue={form.getValues("invoiceDate")} />
+                    <Input type="date" {...form.register("invoiceDate")} />
                  </div>
               </div>
             </div>

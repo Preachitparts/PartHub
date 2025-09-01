@@ -37,4 +37,25 @@ export interface TaxInvoice {
   items: TaxInvoiceItem[];
 }
 
-    
+export interface InvoiceItem {
+  partId: string;
+  partName: string;
+  partNumber: string;
+  quantity: number;
+  unitPrice: number; // Price before tax
+  tax: number;
+  total: number; // Total for this line (exFactPrice * quantity)
+}
+
+export interface Invoice {
+  id: string; // Document ID from Firestore (e.g. INV-12345678)
+  invoiceNumber: string;
+  customerName: string;
+  customerAddress: string;
+  customerPhone: string;
+  invoiceDate: string; // Stored as 'YYYY-MM-DD' string
+  items: InvoiceItem[];
+  subtotal: number;
+  tax: number;
+  total: number;
+}

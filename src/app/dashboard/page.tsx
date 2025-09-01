@@ -15,12 +15,12 @@ import { useToast } from "@/hooks/use-toast";
 const TAX_RATE = 0.219; // 21.9%
 
 const mockParts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[] = [
-  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://placehold.co/600x400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000", taxable: true },
-  { name: "Engine Air Filter", partNumber: "EAF-002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://placehold.co/600x400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300", taxable: true },
-  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://placehold.co/600x400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10", taxable: true },
-  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://placehold.co/600x400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900", taxable: true },
-  { name: "Turbocharger", partNumber: "TRB-CHR-005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://placehold.co/600x400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5", taxable: false },
-  { name: "Fuel Injector", partNumber: "FUL-INJ-006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://placehold.co/600x400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000", taxable: true },
+  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", partCode: "P001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://placehold.co/600x400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000", taxable: true },
+  { name: "Engine Air Filter", partNumber: "EAF-002", partCode: "P002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://placehold.co/600x400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300", taxable: true },
+  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", partCode: "P003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://placehold.co/600x400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10", taxable: true },
+  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", partCode: "P004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://placehold.co/600x400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900", taxable: true },
+  { name: "Turbocharger", partNumber: "TRB-CHR-005", partCode: "P005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://placehold.co/600x400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5", taxable: false },
+  { name: "Fuel Injector", partNumber: "FUL-INJ-006", partCode: "P006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://placehold.co/600x400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000", taxable: true },
 ];
 
 const generatePartsWithTax = (parts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[]): Omit<Part, 'id'>[] => {

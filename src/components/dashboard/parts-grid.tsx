@@ -33,7 +33,7 @@ export function PartsGrid({ parts }: PartsGridProps) {
               />
             </div>
             <CardTitle className="pt-4 text-lg">{part.name}</CardTitle>
-            <CardDescription>PN: {part.partNumber}</CardDescription>
+            <CardDescription>PN: {part.partNumber} / Code: {part.partCode}</CardDescription>
           </CardHeader>
           <CardContent className="flex-grow">
             <p className="text-sm text-muted-foreground line-clamp-2">{part.description}</p>
@@ -49,7 +49,7 @@ export function PartsGrid({ parts }: PartsGridProps) {
             <Badge variant={part.stock > 0 ? "secondary" : "destructive"}>
               {part.stock > 0 ? `${part.stock} in stock` : "Out of stock"}
             </Badge>
-          </CardFooter>
+          </Footer>
         </Card>
       ))}
     </div>

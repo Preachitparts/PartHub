@@ -25,6 +25,7 @@ import {
   Loader2,
   ShoppingCart,
   Settings,
+  FileText,
 } from "lucide-react";
 import { UserNav } from "@/components/dashboard/user-nav";
 import { Button } from "@/components/ui/button";
@@ -82,6 +83,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <Link href="/dashboard/pos">
                   <ShoppingCart />
                   Point of Sale
+                </Link>
+              </Button>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <Button asChild variant="ghost" className="w-full justify-start gap-2">
+                <Link href="/dashboard/invoices">
+                  <FileText />
+                  Invoices
                 </Link>
               </Button>
             </SidebarMenuItem>

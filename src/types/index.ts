@@ -2,6 +2,7 @@ export interface Part {
   id: string;
   name: string;
   partNumber: string;
+  partCode: string;
   description: string;
   price: number; // This will be treated as the base price
   tax: number;

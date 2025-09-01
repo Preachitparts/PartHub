@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, runTransaction, increment, serverTimestamp, orderBy, query, getDoc, writeBatch } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, serverTimestamp, orderBy, query, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter, useParams } from "next/navigation";
 import type { Part, Invoice, Customer, InvoiceItem } from "@/types";
@@ -36,7 +36,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/hooks/use-toast";
 import {
   Loader2,
@@ -81,16 +80,14 @@ export default function EditInvoicePage() {
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
 
   const invoiceForm = useForm<InvoiceFormValues>({
     resolver: zodResolver(invoiceSchema),
   });
 
-  const { fields, append, remove, update, replace } = useFieldArray({
+  const { fields, append, remove, update } = useFieldArray({
     control: invoiceForm.control,
     name: "items",
-    keyName: "key",
   });
 
   async function fetchInitialData() {
@@ -110,9 +107,7 @@ export default function EditInvoicePage() {
             const invoiceDoc = await getDoc(invoiceRef);
             if (invoiceDoc.exists()) {
                 const invoiceData = {id: invoiceDoc.id, ...invoiceDoc.data()} as Invoice;
-                const itemIds = new Set(invoiceData.items.map(item => item.partId));
-                setSelectedItemIds(itemIds);
-
+                
                 invoiceForm.reset({
                     invoiceNumber: invoiceData.invoiceNumber,
                     customerId: invoiceData.customerId,
@@ -141,12 +136,11 @@ export default function EditInvoicePage() {
   const watchPaidAmount = invoiceForm.watch("paidAmount");
 
   const { subtotal, taxAmount, total, balanceDue } = useMemo(() => {
-    const activeItems = (watchItems || []).filter(item => selectedItemIds.has(item.partId));
-    const subtotal = activeItems.reduce(
+    const subtotal = (watchItems || []).reduce(
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
     );
-    const taxAmount = activeItems.reduce(
+    const taxAmount = (watchItems || []).reduce(
       (acc, item) => acc + (item.tax || 0) * (item.quantity || 1),
       0
     );
@@ -154,7 +148,7 @@ export default function EditInvoicePage() {
     const balanceDueValue = total - (watchPaidAmount || 0);
     
     return { subtotal, taxAmount, total, balanceDue: balanceDueValue };
-  }, [watchItems, watchPaidAmount, selectedItemIds]);
+  }, [watchItems, watchPaidAmount]);
 
   const handlePartChange = (index: number, partId: string) => {
     const selectedPart = parts.find((p) => p.id === partId);
@@ -170,8 +164,6 @@ export default function EditInvoicePage() {
         exFactPrice: selectedPart.exFactPrice,
         total: selectedPart.exFactPrice * quantity,
       });
-      // Automatically select the new item
-      setSelectedItemIds(prev => new Set(prev).add(partId));
     }
   };
 
@@ -207,75 +199,49 @@ export default function EditInvoicePage() {
   const addNewItem = () => {
     append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, exFactPrice: 0, partName: '', partNumber: '' });
   };
-
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-        const allItemIds = new Set(fields.map(field => field.partId));
-        setSelectedItemIds(allItemIds);
-    } else {
-        setSelectedItemIds(new Set());
-    }
-  };
-
-  const handleSelectItem = (partId: string, checked: boolean) => {
-    setSelectedItemIds(prev => {
-        const newSet = new Set(prev);
-        if (checked) {
-            newSet.add(partId);
-        } else {
-            newSet.delete(partId);
-        }
-        return newSet;
-    });
-  };
-
-  const deleteSelectedItems = () => {
-    const newItems = fields.filter(field => !selectedItemIds.has(field.partId));
-    replace(newItems);
-    setSelectedItemIds(new Set());
-  };
   
   async function onSubmit(data: InvoiceFormValues) {
     setIsSaving(true);
-
-    const updatedItems = data.items.filter(item => selectedItemIds.has(item.partId));
-
+    
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
-            const invoiceDoc = await transaction.get(invoiceRef);
+            const originalInvoiceDoc = await transaction.get(invoiceRef);
 
-            if (!invoiceDoc.exists()) {
+            if (!originalInvoiceDoc.exists()) {
                 throw new Error("Invoice not found. It may have been deleted.");
             }
-            const originalInvoice = invoiceDoc.data() as Invoice;
+            const originalInvoice = originalInvoiceDoc.data() as Invoice;
 
             const stockChanges = new Map<string, number>();
 
-            // Return original items to stock
+            // Calculate stock changes based on the difference between original and new items
             originalInvoice.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
-            });
-            // Remove updated items from stock
-            updatedItems.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity); // Return to stock
             });
 
+            data.items.forEach(item => {
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity); // Take from stock
+            });
+            
+            // Fetch all parts involved in the transaction to check stock levels
             const partIds = Array.from(stockChanges.keys());
             const partRefs = partIds.map(id => doc(db, "parts", id));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
-            
-            // Validate stock levels
+
+            // Validate stock levels before writing
             for(let i = 0; i < partDocs.length; i++) {
                 const partDoc = partDocs[i];
                 const partId = partIds[i];
                 if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
                 
                 const stockChange = stockChanges.get(partId) || 0;
-                const currentStock = partDoc.data().stock;
-
-                if (currentStock + stockChange < 0) {
-                    throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Change: ${stockChange}`);
+                // If stockChange > 0, we are returning items, so no check needed.
+                if (stockChange < 0) {
+                  const currentStock = partDoc.data().stock;
+                  if (currentStock + stockChange < 0) {
+                      throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required: ${-stockChange}`);
+                  }
                 }
             }
             
@@ -288,8 +254,8 @@ export default function EditInvoicePage() {
             }
             
             // Prepare and update the invoice
-            const newSubtotal = updatedItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-            const newTax = updatedItems.reduce((acc, item) => acc + item.tax * item.quantity, 0);
+            const newSubtotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+            const newTax = data.items.reduce((acc, item) => acc + item.tax * item.quantity, 0);
             const newTotal = newSubtotal + newTax;
             const newBalanceDue = newTotal - data.paidAmount;
             const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
@@ -297,7 +263,6 @@ export default function EditInvoicePage() {
             
             const finalInvoiceData = {
                 ...data,
-                items: updatedItems,
                 customerName: selectedCustomer?.name || '',
                 customerAddress: selectedCustomer?.address || '',
                 customerPhone: selectedCustomer?.phone || '',
@@ -399,26 +364,10 @@ export default function EditInvoicePage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="flex justify-end gap-2 mb-4">
-                <Button 
-                    type="button" 
-                    variant="destructive"
-                    onClick={deleteSelectedItems} 
-                    disabled={selectedItemIds.size === 0}
-                >
-                    <Trash2 className="mr-2 h-4 w-4" /> Delete Selected
-                </Button>
-              </div>
               <div>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[40px]">
-                          <Checkbox
-                             checked={selectedItemIds.size === fields.length && fields.length > 0}
-                             onCheckedChange={(checked) => handleSelectAll(!!checked)}
-                          />
-                      </TableHead>
                       <TableHead className="w-[35%]">Product</TableHead>
                       <TableHead>Qty</TableHead>
                       <TableHead>Unit Price</TableHead>
@@ -431,13 +380,7 @@ export default function EditInvoicePage() {
                     {fields.map((field, index) => {
                       const item = watchItems[index];
                       return (
-                      <TableRow key={field.key} data-state={selectedItemIds.has(item.partId) ? 'selected' : ''}>
-                        <TableCell>
-                           <Checkbox
-                                checked={selectedItemIds.has(item.partId)}
-                                onCheckedChange={(checked) => handleSelectItem(item.partId, !!checked)}
-                           />
-                        </TableCell>
+                      <TableRow key={field.id}>
                         <TableCell>
                           <FormField
                               control={invoiceForm.control}

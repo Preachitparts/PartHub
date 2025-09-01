@@ -142,9 +142,9 @@ export default function InvoicesPage() {
                 item.partName,
                 item.partNumber,
                 item.quantity,
-                `GHS ${item.unitPrice.toFixed(2)}`,
-                `GHS ${item.tax.toFixed(2)}`,
-                `GHS ${(item.exFactPrice * item.quantity).toFixed(2)}`
+                `GHS ${(item.unitPrice || 0).toFixed(2)}`,
+                `GHS ${(item.tax || 0).toFixed(2)}`,
+                `GHS ${((item.exFactPrice || 0) * (item.quantity || 0)).toFixed(2)}`
             ];
             tableRows.push(itemData);
         });
@@ -165,12 +165,12 @@ export default function InvoicesPage() {
         }
 
         doc.setFontSize(10);
-        doc.text(`Subtotal: GHS ${invoice.subtotal.toFixed(2)}`, 140, finalY + 10);
-        doc.text(`Tax: GHS ${invoice.tax.toFixed(2)}`, 140, finalY + 15);
-        doc.text(`Paid: GHS ${invoice.paidAmount.toFixed(2)}`, 140, finalY + 20);
+        doc.text(`Subtotal: GHS ${(invoice.subtotal || 0).toFixed(2)}`, 140, finalY + 10);
+        doc.text(`Tax: GHS ${(invoice.tax || 0).toFixed(2)}`, 140, finalY + 15);
+        doc.text(`Paid: GHS ${(invoice.paidAmount || 0).toFixed(2)}`, 140, finalY + 20);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text(`Balance Due: GHS ${invoice.balanceDue.toFixed(2)}`, 140, finalY + 27);
+        doc.text(`Balance Due: GHS ${(invoice.balanceDue || 0).toFixed(2)}`, 140, finalY + 27);
         doc.setFont('helvetica', 'normal');
 
         // Footer
@@ -239,7 +239,7 @@ export default function InvoicesPage() {
                                                     {invoice.status}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className="text-right font-medium">GHS {invoice.balanceDue.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right font-medium">GHS {(invoice.balanceDue || 0).toFixed(2)}</TableCell>
                                             <TableCell className="flex justify-center items-center">
                                                 <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
                                                     <Eye className="h-4 w-4" />
@@ -340,10 +340,10 @@ export default function InvoicesPage() {
                                         <TableRow key={index}>
                                             <TableCell>{item.partName}</TableCell>
                                             <TableCell>{item.partNumber}</TableCell>
-                                            <TableCell className="text-right">GHS {item.unitPrice.toFixed(2)}</TableCell>
-                                            <TableCell className="text-right">GHS {item.tax.toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {(item.unitPrice || 0).toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {(item.tax || 0).toFixed(2)}</TableCell>
                                             <TableCell className="text-right">{item.quantity}</TableCell>
-                                            <TableCell className="text-right">GHS {(item.exFactPrice * item.quantity).toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {((item.exFactPrice || 0) * item.quantity).toFixed(2)}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
@@ -353,23 +353,23 @@ export default function InvoicesPage() {
                             <div className="w-full max-w-xs space-y-2">
                                 <div className="flex justify-between">
                                     <span>Subtotal</span>
-                                    <span>GHS {selectedInvoice.subtotal.toFixed(2)}</span>
+                                    <span>GHS {(selectedInvoice.subtotal || 0).toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Tax</span>
-                                    <span>GHS {selectedInvoice.tax.toFixed(2)}</span>
+                                    <span>GHS {(selectedInvoice.tax || 0).toFixed(2)}</span>
                                  </div>
                                   <div className="flex justify-between">
                                     <span>Total Amount</span>
-                                    <span>GHS {selectedInvoice.total.toFixed(2)}</span>
+                                    <span>GHS {(selectedInvoice.total || 0).toFixed(2)}</span>
                                  </div>
                                   <div className="flex justify-between text-destructive">
                                     <span>Amount Paid</span>
-                                    <span>- GHS {selectedInvoice.paidAmount.toFixed(2)}</span>
+                                    <span>- GHS {(selectedInvoice.paidAmount || 0).toFixed(2)}</span>
                                  </div>
                                 <div className="flex justify-between font-bold text-lg border-t pt-2">
                                     <span>Balance Due</span>
-                                    <span>GHS {selectedInvoice.balanceDue.toFixed(2)}</span>
+                                    <span>GHS {(selectedInvoice.balanceDue || 0).toFixed(2)}</span>
                                 </div>
                             </div>
                         </div>

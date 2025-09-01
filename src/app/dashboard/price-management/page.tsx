@@ -93,69 +93,70 @@ export default function PriceManagementPage() {
   const handleSaveChanges = async () => {
     setIsSaving(true);
     try {
-        const batch = writeBatch(db);
-        let updatedPricesCount = 0;
+      const batch = writeBatch(db);
+      let updatedPricesCount = 0;
+      let taxRateUpdated = false;
 
-        // Save the new tax rate
-        const taxDocRef = doc(db, "internal", "seeding_flag");
-        await updateDoc(taxDocRef, { taxRate: taxRate });
+      // Check if tax rate has changed
+      const taxDocRef = doc(db, "internal", "seeding_flag");
+      const taxDoc = await getDoc(taxDocRef);
+      if (!taxDoc.exists() || taxDoc.data().taxRate !== taxRate) {
+        batch.set(taxDocRef, { taxRate: taxRate }, { merge: true });
         await logActivity(`Updated global tax rate to ${taxRate * 100}%.`);
+        taxRateUpdated = true;
+      }
 
-        for (const part of parts) {
-            const partRef = doc(db, "parts", part.id);
-            let hasUpdate = false;
+      for (const part of parts) {
+        const partRef = doc(db, "parts", part.id);
+        
+        const priceChanged = part.newPrice !== undefined && part.newPrice !== (part.pricingType === 'inclusive' ? part.exFactPrice : part.price);
+        const typeChanged = part.newPricingType !== undefined && part.newPricingType !== part.pricingType;
 
-            const newPrice = part.newPrice;
-            const newPricingType = part.newPricingType || part.pricingType;
-            let currentPrice = part.price;
-            let updates: Partial<Part> = {};
+        if (priceChanged || typeChanged || taxRateUpdated) {
+          const updates: Partial<EditablePart> = {};
 
-            if (newPrice !== undefined && newPrice !== part.price) {
-                updates.price = newPrice;
-                updates.previousPrice = part.price;
-                currentPrice = newPrice;
-                hasUpdate = true;
-                updatedPricesCount++;
-                logActivity(`Updated price for ${part.name} from GH₵${part.price.toFixed(2)} to GH₵${newPrice.toFixed(2)}.`);
-            }
+          const newPricingType = part.newPricingType || part.pricingType;
+          let newBasePrice = part.price;
+          let newExFactPrice = part.exFactPrice;
 
-            if (newPricingType !== part.pricingType) {
-                 updates.pricingType = newPricingType;
-                 hasUpdate = true;
-            }
-
-            // Recalculate tax if price, pricing type, or global tax rate changed
-            let basePrice = newPrice ?? part.price;
-            let taxAmount = 0;
-            let exFactPrice = 0;
-
-            if (part.taxable) {
-                if (newPricingType === 'inclusive') {
-                    basePrice = (newPrice ?? part.price) / (1 + taxRate);
-                    taxAmount = (newPrice ?? part.price) - basePrice;
-                    exFactPrice = newPrice ?? part.price;
-                } else { // exclusive
-                    basePrice = newPrice ?? part.price;
-                    taxAmount = basePrice * taxRate;
-                    exFactPrice = basePrice + taxAmount;
-                }
-            } else {
-                 basePrice = newPrice ?? part.price;
-                 exFactPrice = basePrice;
-            }
-             
-            updates.price = parseFloat(basePrice.toFixed(4));
-            updates.tax = parseFloat(taxAmount.toFixed(4));
-            updates.exFactPrice = parseFloat(exFactPrice.toFixed(4));
-             
-            batch.update(partRef, updates);
+          if (priceChanged) {
+             if (newPricingType === 'inclusive') {
+                newExFactPrice = part.newPrice!;
+                newBasePrice = newExFactPrice / (1 + taxRate);
+             } else { // exclusive
+                newBasePrice = part.newPrice!;
+                newExFactPrice = newBasePrice * (1 + taxRate);
+             }
+             updates.previousPrice = part.price;
+             logActivity(`Updated price for ${part.name} from GH₵${part.price.toFixed(2)} to GH₵${newBasePrice.toFixed(2)}.`);
+             updatedPricesCount++;
+          } else if (typeChanged || taxRateUpdated) {
+              // Recalculate based on existing price if only type or tax rate changed
+              if (newPricingType === 'inclusive') {
+                // old price was exclusive, now it's inclusive. The exFactPrice becomes the new user-facing price.
+                newExFactPrice = part.exFactPrice; 
+                newBasePrice = newExFactPrice / (1 + taxRate);
+              } else { // exclusive
+                // old price was inclusive, now it's exclusive. The base price becomes the new user-facing price.
+                newBasePrice = part.price;
+                newExFactPrice = newBasePrice * (1 + taxRate);
+              }
+          }
+        
+          updates.price = parseFloat(newBasePrice.toFixed(4));
+          updates.tax = parseFloat((newExFactPrice - newBasePrice).toFixed(4));
+          updates.exFactPrice = parseFloat(newExFactPrice.toFixed(4));
+          updates.pricingType = newPricingType;
+        
+          batch.update(partRef, updates);
         }
+      }
 
       await batch.commit();
 
       toast({
         title: "Success",
-        description: `Tax rate and ${updatedPricesCount} part price(s) have been updated successfully.`,
+        description: `Changes saved successfully. ${updatedPricesCount} part price(s) were updated.`,
       });
       fetchInitialData(); // Re-fetch to show updated data
     } catch (error) {
@@ -184,7 +185,7 @@ export default function PriceManagementPage() {
         <CardHeader>
           <CardTitle>Global Tax Rate</CardTitle>
           <CardDescription>
-            Set the tax rate that applies to all taxable parts. Enter the rate as a decimal (e.g., 0.219 for 21.9%). This will recalculate prices for all items.
+            Set the tax rate that applies to all taxable parts. Enter the rate as a decimal (e.g., 0.219 for 21.9%). This will recalculate prices for all items on save.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -206,7 +207,7 @@ export default function PriceManagementPage() {
         <CardHeader>
           <CardTitle>Part Prices</CardTitle>
           <CardDescription>
-            Update the price for individual parts. The `price` in the database will be the **tax-exclusive** price.
+            Update the price for individual parts. The price you enter will be interpreted based on the selected pricing type.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -237,18 +238,17 @@ export default function PriceManagementPage() {
                       </TableCell>
                        <TableCell>
                          <RadioGroup
-                            defaultValue={part.pricingType}
                             value={part.newPricingType || part.pricingType}
                             onValueChange={(value: 'inclusive' | 'exclusive') => handlePricingTypeChange(part.id, value)}
                             className="flex gap-4"
                           >
                             <div className="flex items-center space-x-2">
                                 <RadioGroupItem value="exclusive" id={`${part.id}-exclusive`} />
-                                <Label htmlFor={`${part.id}-exclusive`}>Exclusive</Label>
+                                <Label htmlFor={`${part.id}-exclusive`}>Excl</Label>
                             </div>
                             <div className="flex items-center space-x-2">
                                 <RadioGroupItem value="inclusive" id={`${part.id}-inclusive`} />
-                                <Label htmlFor={`${part.id}-inclusive`}>Inclusive</Label>
+                                <Label htmlFor={`${part.id}-inclusive`}>Inclu</Label>
                             </div>
                          </RadioGroup>
                       </TableCell>
@@ -257,7 +257,7 @@ export default function PriceManagementPage() {
                           type="number"
                           step="0.01"
                           placeholder={
-                            part.pricingType === 'inclusive' ? part.exFactPrice.toFixed(2) : part.price.toFixed(2)
+                            (part.newPricingType || part.pricingType) === 'inclusive' ? part.exFactPrice.toFixed(2) : part.price.toFixed(2)
                           }
                           value={part.newPrice ?? ''}
                           onChange={(e) => handlePriceChange(part.id, e.target.value)}

@@ -247,11 +247,16 @@ export default function InvoicesPage() {
                                                 <TooltipProvider>
                                                     <Tooltip>
                                                         <TooltipTrigger asChild>
-                                                            <span tabIndex={0}>
-                                                                <Button variant="ghost" size="icon" disabled>
+                                                            <Button variant="ghost" size="icon" asChild>
+                                                                 <Link 
+                                                                    href={`/dashboard/invoices/edit/${invoice.id}`}
+                                                                    className={!canEdit ? 'pointer-events-none opacity-50' : ''}
+                                                                    aria-disabled={!canEdit}
+                                                                    tabIndex={!canEdit ? -1 : undefined}
+                                                                >
                                                                     <Pencil className="h-4 w-4" />
-                                                                </Button>
-                                                            </span>
+                                                                </Link>
+                                                            </Button>
                                                         </TooltipTrigger>
                                                         { !canEdit &&
                                                             <TooltipContent>
@@ -388,4 +393,6 @@ export default function InvoicesPage() {
             </Dialog>
 
         </div>
-    )
+    );
+
+    

@@ -210,38 +210,39 @@ export default function EditInvoicePage() {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
             
-            // --- Calculate Stock Adjustments ---
-            const stockAdjustments = new Map<string, number>();
+            const partIdToQuantityMap = new Map<string, number>();
 
-            // Add back original quantities
             originalInvoice.items.forEach(item => {
-                stockAdjustments.set(item.partId, (stockAdjustments.get(item.partId) || 0) + item.quantity);
+                partIdToQuantityMap.set(item.partId, (partIdToQuantityMap.get(item.partId) || 0) - item.quantity);
             });
 
-            // Subtract new quantities
             data.items.forEach(item => {
-                stockAdjustments.set(item.partId, (stockAdjustments.get(item.partId) || 0) - item.quantity);
+                partIdToQuantityMap.set(item.partId, (partIdToQuantityMap.get(item.partId) || 0) + item.quantity);
             });
-
-            // --- READ PHASE: Check stock availability ---
-            const partRefs = Array.from(stockAdjustments.keys()).map(partId => doc(db, "parts", partId));
+            
+            const partRefs = Array.from(partIdToQuantityMap.keys()).map(partId => doc(db, "parts", partId));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
             const partsData = new Map(partDocs.map(p => [p.id, p.data() as Part]));
+            
+            for(const [partId, quantityChange] of partIdToQuantityMap.entries()) {
+                const partData = partsData.get(partId);
+                const originalItem = originalInvoice.items.find(i => i.partId === partId);
+                const originalStock = partData?.stock ?? 0;
+                const originalInvoiceQuantity = originalItem?.quantity ?? 0;
 
-            for (const [partId, adjustment] of stockAdjustments.entries()) {
-                // If adjustment is negative, it means we are taking more than before.
-                if (adjustment < 0) {
-                    const partData = partsData.get(partId);
-                    if (!partData || partData.stock < Math.abs(adjustment)) {
-                        throw new Error(`Not enough stock for ${partData?.name || 'a part'}. Available: ${partData?.stock}, needed: ${Math.abs(adjustment)}`);
-                    }
+                const stockAfterRevert = originalStock + originalInvoiceQuantity;
+                const newInvoiceQuantity = data.items.find(i => i.partId === partId)?.quantity ?? 0;
+
+                if (stockAfterRevert < newInvoiceQuantity) {
+                    throw new Error(`Not enough stock for ${partData?.name || 'a part'}. Available: ${stockAfterRevert}, requested: ${newInvoiceQuantity}`);
                 }
             }
 
-            // --- WRITE PHASE: Update stock and invoice ---
-            for (const [partId, adjustment] of stockAdjustments.entries()) {
-                const partRef = doc(db, "parts", partId);
-                transaction.update(partRef, { stock: increment(adjustment) });
+            for (const [partId, quantityChange] of partIdToQuantityMap.entries()) {
+                if (quantityChange !== 0) {
+                    const partRef = doc(db, "parts", partId);
+                    transaction.update(partRef, { stock: increment(-quantityChange) });
+                }
             }
 
             const newTotal = data.items.reduce((acc, item) => acc + item.total, 0);
@@ -249,7 +250,7 @@ export default function EditInvoicePage() {
             const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
             const selectedCustomer = customers.find(c => c.id === data.customerId);
             
-            transaction.update(invoiceRef, {
+            const finalInvoiceData = {
                 ...data,
                 customerName: selectedCustomer?.name || '',
                 customerAddress: selectedCustomer?.address || '',
@@ -257,10 +258,12 @@ export default function EditInvoicePage() {
                 subtotal,
                 tax: taxAmount,
                 total,
-                balanceDue,
+                balanceDue: newBalanceDue,
                 status: newStatus,
                 updatedAt: serverTimestamp(),
-            });
+            };
+            
+            transaction.update(invoiceRef, finalInvoiceData);
         });
 
         toast({ title: "Invoice Updated", description: "All changes have been saved successfully." });

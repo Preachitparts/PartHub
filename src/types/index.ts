@@ -53,6 +53,7 @@ export interface InvoiceItem {
 export interface Invoice {
   id: string; // Document ID from Firestore (e.g. INV-12345678)
   invoiceNumber: string;
+  customerId: string;
   customerName: string;
   customerAddress: string;
   customerPhone: string;
@@ -67,6 +68,16 @@ export interface Invoice {
   paidAmount: number;
   balanceDue: number;
 }
+
+export interface Customer {
+    id: string;
+    name: string;
+    phone: string;
+    address: string;
+    createdAt: Timestamp;
+    balance: number; // This is a client-side calculated field
+}
+
 
 export interface ActivityLog {
     id: string;

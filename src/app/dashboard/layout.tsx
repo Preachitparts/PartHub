@@ -98,6 +98,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               </SidebarMenuButton>
             </SidebarMenuItem>
              <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={pathname.startsWith('/dashboard/customers')}>
+                <Link href="/dashboard/customers">
+                  <Users />
+                  Customers
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={pathname.startsWith('/dashboard/statements')}>
                 <Link href="/dashboard/statements">
                   <Users />

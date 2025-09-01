@@ -2,9 +2,9 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { collection, getDocs, doc, runTransaction, increment } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { Part, Invoice } from "@/types";
+import type { Part, Invoice, Customer } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -29,6 +29,7 @@ import {
   Trash2,
   Loader2,
   FileText,
+  UserPlus
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Image from "next/image";
@@ -36,6 +37,11 @@ import { useRouter } from "next/navigation";
 import { logActivity } from "@/lib/activity-log";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Combobox, ComboboxOption } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 
 
 interface CartItem extends Part {
@@ -44,16 +50,25 @@ interface CartItem extends Part {
   saleTax: number;
 }
 
+const customerSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters."),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+});
+type CustomerFormValues = z.infer<typeof customerSchema>;
+
+
 export default function POSPage() {
   const [parts, setParts] = useState<Part[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [customerAddress, setCustomerAddress] = useState("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [paidAmount, setPaidAmount] = useState(0);
+  const [isCustomerFormOpen, setIsCustomerFormOpen] = useState(false);
   
   const today = new Date();
   const futureDate = new Date(today);
@@ -63,28 +78,44 @@ export default function POSPage() {
   const { toast } = useToast();
   const router = useRouter();
 
-  useEffect(() => {
-    const fetchParts = async () => {
-      setLoading(true);
-      try {
+  const customerForm = useForm<CustomerFormValues>({
+    resolver: zodResolver(customerSchema),
+    defaultValues: { name: "", phone: "", address: "" },
+  });
+
+
+  const fetchInitialData = async () => {
+    setLoading(true);
+    try {
         const partsCollection = collection(db, "parts");
         const partsSnapshot = await getDocs(partsCollection);
         const partsList = partsSnapshot.docs.map(
           (doc) => ({ ...doc.data(), id: doc.id } as Part)
         );
         setParts(partsList);
-      } catch (error) {
-        console.error("Error fetching parts:", error);
+
+        const customersCollection = collection(db, "customers");
+        const customersSnapshot = await getDocs(customersCollection);
+        const customersList = customersSnapshot.docs.map(
+          (doc) => ({ ...doc.data(), id: doc.id } as Customer)
+        );
+        setCustomers(customersList);
+        setCustomerOptions(customersList.map(c => ({value: c.id, label: c.name})))
+
+    } catch (error) {
+        console.error("Error fetching data:", error);
         toast({
           variant: "destructive",
           title: "Error",
-          description: "Could not fetch parts data.",
+          description: "Could not fetch initial data.",
         });
-      } finally {
+    } finally {
         setLoading(false);
-      }
-    };
-    fetchParts();
+    }
+  };
+
+  useEffect(() => {
+    fetchInitialData();
   }, [toast]);
 
   const filteredParts = useMemo(() => {
@@ -174,16 +205,47 @@ export default function POSPage() {
     setPaidAmount(total);
   }, [total]);
 
+  async function onCustomerSubmit(data: CustomerFormValues) {
+    setIsSaving(true);
+    try {
+        const newCustomerRef = collection(db, "customers");
+        const docRef = await addDoc(newCustomerRef, {
+            ...data,
+            createdAt: serverTimestamp(),
+        });
+        
+        toast({ title: "Customer Created", description: `Successfully created customer: ${data.name}.` });
+        await logActivity(`Created new customer: ${data.name}`);
+        
+        await fetchInitialData();
+        setSelectedCustomerId(docRef.id);
+        
+        setIsCustomerFormOpen(false);
+        customerForm.reset();
+    } catch (error: any) {
+        toast({ variant: "destructive", title: "Operation Failed", description: error.message || "An unexpected error occurred." });
+    } finally {
+        setIsSaving(false);
+    }
+  }
+
 
   const handleCompleteSale = async () => {
     if (cart.length === 0) {
         toast({ variant: "destructive", title: "Cart is empty", description: "Add items to the cart to complete a sale." });
         return;
     }
-    if (!customerName) {
-        toast({ variant: "destructive", title: "Customer Name Required", description: "Please enter a customer name." });
+    if (!selectedCustomerId) {
+        toast({ variant: "destructive", title: "Customer Not Selected", description: "Please select a customer for the sale." });
         return;
     }
+
+    const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+    if (!selectedCustomer) {
+        toast({ variant: "destructive", title: "Customer Error", description: "Selected customer could not be found." });
+        return;
+    }
+
 
     setIsSaving(true);
     const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
@@ -205,9 +267,10 @@ export default function POSPage() {
             const status = balanceDue <= 0 ? 'Paid' : 'Unpaid';
             const invoiceToSave: Omit<Invoice, 'id'> = {
                 invoiceNumber: invoiceNumber,
-                customerName: customerName,
-                customerAddress: customerAddress || '',
-                customerPhone: customerPhone || '',
+                customerId: selectedCustomer.id,
+                customerName: selectedCustomer.name,
+                customerAddress: selectedCustomer.address || '',
+                customerPhone: selectedCustomer.phone || '',
                 invoiceDate: new Date().toISOString().split("T")[0],
                 dueDate,
                 status,
@@ -225,13 +288,11 @@ export default function POSPage() {
             transaction.set(invoiceRef, invoiceToSave);
         });
 
-        await logActivity(`Completed sale for invoice ${invoiceNumber} to ${customerName}.`);
+        await logActivity(`Completed sale for invoice ${invoiceNumber} to ${selectedCustomer.name}.`);
         toast({ title: "Sale Complete!", description: `Invoice ${invoiceNumber} created and stock updated.` });
         
         setCart([]);
-        setCustomerName("");
-        setCustomerPhone("");
-        setCustomerAddress("");
+        setSelectedCustomerId("");
         setSearchTerm("");
         setPaidAmount(0);
         
@@ -251,6 +312,38 @@ export default function POSPage() {
 
 
   return (
+    <>
+    <Dialog open={isCustomerFormOpen} onOpenChange={setIsCustomerFormOpen}>
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>Add New Customer</DialogTitle>
+                <DialogDescription>Enter the details for the new customer. They will be automatically selected after creation.</DialogDescription>
+            </DialogHeader>
+            <form onSubmit={customerForm.handleSubmit(onCustomerSubmit)} id="customer-form" className="space-y-4 py-4">
+                  <div>
+                      <Label htmlFor="name">Customer Name</Label>
+                      <Input id="name" {...customerForm.register("name")} />
+                      {customerForm.formState.errors.name && <p className="text-destructive text-xs">{customerForm.formState.errors.name.message}</p>}
+                  </div>
+                    <div>
+                      <Label htmlFor="phone">Phone Number (Optional)</Label>
+                      <Input id="phone" {...customerForm.register("phone")} />
+                  </div>
+                    <div>
+                      <Label htmlFor="address">Address (Optional)</Label>
+                      <Input id="address" {...customerForm.register("address")} />
+                  </div>
+            </form>
+            <DialogFooter>
+                <Button variant="outline" onClick={() => { setIsCustomerFormOpen(false); customerForm.reset(); }}>Cancel</Button>
+                <Button type="submit" form="customer-form" disabled={isSaving}>
+                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Save Customer
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
+
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
         <Card>
@@ -326,20 +419,23 @@ export default function POSPage() {
             <CardTitle>Current Sale</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                    <Label htmlFor="customerName">Customer Name</Label>
-                    <Input id="customerName" placeholder="John Doe" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-                </div>
-                 <div className="space-y-2">
-                    <Label htmlFor="customerPhone">Customer Phone</Label>
-                    <Input id="customerPhone" placeholder="024 123 4567" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
-                </div>
-            </div>
             <div className="space-y-2">
-                <Label htmlFor="customerAddress">Customer Address (Optional)</Label>
-                <Textarea id="customerAddress" placeholder="123 Main St, Accra" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
+                <Label>Customer</Label>
+                 <div className="flex items-center gap-2">
+                    <Combobox
+                        options={customerOptions}
+                        value={selectedCustomerId}
+                        onChange={setSelectedCustomerId}
+                        placeholder="Select a customer..."
+                        searchPlaceholder="Search customers..."
+                        emptyPlaceholder="No customers found."
+                    />
+                    <Button type="button" variant="outline" size="icon" onClick={() => setIsCustomerFormOpen(true)}>
+                        <UserPlus className="h-4 w-4" />
+                    </Button>
+                </div>
             </div>
+            
              <div className="space-y-2">
                 <Label htmlFor="dueDate">Due Date</Label>
                 <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
@@ -398,5 +494,6 @@ export default function POSPage() {
         </Card>
       </div>
     </div>
+    </>
   );
 }

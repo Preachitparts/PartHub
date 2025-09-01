@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, query, where, orderBy } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Loader2, Download, Users, FileText, File } from "lucide-react";
-import type { Invoice } from "@/types";
+import type { Invoice, Customer } from "@/types";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -36,46 +36,61 @@ interface jsPDFWithAutoTable extends jsPDF {
 }
 
 export default function StatementsPage() {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
   const [customerInvoices, setCustomerInvoices] = useState<Invoice[]>([]);
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<string>("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingStatement, setLoadingStatement] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    const fetchInvoices = async () => {
+    const fetchInitialData = async () => {
       setLoading(true);
       try {
-        const invoicesQuery = query(collection(db, "invoices"));
+        const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "desc"));
         const querySnapshot = await getDocs(invoicesQuery);
         const invoicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
-        setInvoices(invoicesList);
+        setAllInvoices(invoicesList);
 
-        const uniqueCustomers = [...new Set(invoicesList.map(inv => inv.customerName))];
+        const customersQuery = query(collection(db, "customers"), orderBy("name"));
+        const customersSnapshot = await getDocs(customersQuery);
+        const customersList = customersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Customer));
+
         setCustomerOptions(
-          uniqueCustomers.map(name => ({ value: name, label: name }))
+          customersList.map(cust => ({ value: cust.id, label: cust.name }))
         );
       } catch (error) {
-        console.error("Error fetching invoices: ", error);
+        console.error("Error fetching initial data: ", error);
         toast({
           variant: "destructive",
           title: "Error",
-          description: "Could not fetch initial invoice data.",
+          description: "Could not fetch initial data.",
         });
       } finally {
         setLoading(false);
       }
     };
-    fetchInvoices();
+    fetchInitialData();
   }, [toast]);
 
-  const handleCustomerChange = (customerName: string) => {
-    setSelectedCustomer(customerName);
+  const handleCustomerChange = async (customerId: string) => {
+    setSelectedCustomerId(customerId);
+    if (!customerId) {
+        setCustomerInvoices([]);
+        setSelectedCustomer(null);
+        return;
+    }
     setLoadingStatement(true);
-    const filteredInvoices = invoices
-      .filter(inv => inv.customerName === customerName)
+    
+    const customerDoc = await getDoc(doc(db, "customers", customerId));
+    if (customerDoc.exists()) {
+        setSelectedCustomer(customerDoc.data() as Customer);
+    }
+
+    const filteredInvoices = allInvoices
+      .filter(inv => inv.customerId === customerId)
       .sort((a, b) => new Date(b.invoiceDate).getTime() - new Date(a.invoiceDate).getTime());
 
     const updatedInvoices = filteredInvoices.map(inv => {
@@ -98,7 +113,7 @@ export default function StatementsPage() {
   }, [customerInvoices]);
 
   const handleDownloadCsv = () => {
-    if (customerInvoices.length === 0) return;
+    if (customerInvoices.length === 0 || !selectedCustomer) return;
 
     const data = customerInvoices.map(inv => ({
       "Invoice #": inv.invoiceNumber,
@@ -116,7 +131,7 @@ export default function StatementsPage() {
     if (link.download !== undefined) {
       const url = URL.createObjectURL(blob);
       link.setAttribute("href", url);
-      link.setAttribute("download", `statement_${selectedCustomer.replace(/\s+/g, '_')}.csv`);
+      link.setAttribute("download", `statement_${selectedCustomer.name.replace(/\s+/g, '_')}.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
@@ -125,11 +140,11 @@ export default function StatementsPage() {
   };
 
   const handleDownloadPdf = () => {
-    if (customerInvoices.length === 0) return;
+    if (customerInvoices.length === 0 || !selectedCustomer) return;
     const doc = new jsPDF() as jsPDFWithAutoTable;
     
     doc.setFontSize(18);
-    doc.text(`Statement for ${selectedCustomer}`, 14, 22);
+    doc.text(`Statement for ${selectedCustomer.name}`, 14, 22);
     
     doc.setFontSize(11);
     doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 30);
@@ -159,9 +174,9 @@ export default function StatementsPage() {
     const finalY = (doc as any).autoTable.previous.finalY;
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Total Balance Due: GHS ${totalBalanceDue.toFixed(2)}`, 140, finalY + 15, { align: 'right' });
+    doc.text(`Total Balance Due: GHS ${totalBalanceDue.toFixed(2)}`, 200, finalY + 15, { align: 'right' });
 
-    doc.save(`statement_${selectedCustomer.replace(/\s+/g, '_')}.pdf`);
+    doc.save(`statement_${selectedCustomer.name.replace(/\s+/g, '_')}.pdf`);
   };
 
 
@@ -180,14 +195,16 @@ export default function StatementsPage() {
             <Loader2 className="h-8 w-8 animate-spin" />
           ) : (
             <div className="flex flex-col md:flex-row gap-4 md:items-center">
-              <Combobox
-                options={customerOptions}
-                value={selectedCustomer}
-                onChange={handleCustomerChange}
-                placeholder="Select a customer..."
-                searchPlaceholder="Search customers..."
-                emptyPlaceholder="No customers found."
-              />
+              <div className="w-full md:w-64">
+                <Combobox
+                  options={customerOptions}
+                  value={selectedCustomerId}
+                  onChange={handleCustomerChange}
+                  placeholder="Select a customer..."
+                  searchPlaceholder="Search customers..."
+                  emptyPlaceholder="No customers found."
+                />
+              </div>
               <div className="flex gap-2">
                  <Button onClick={handleDownloadCsv} disabled={customerInvoices.length === 0}>
                     <File className="mr-2 h-4 w-4" /> Export CSV
@@ -201,10 +218,10 @@ export default function StatementsPage() {
         </CardContent>
       </Card>
 
-      {selectedCustomer && (
+      {selectedCustomerId && (
         <Card>
           <CardHeader>
-            <CardTitle>Statement for {selectedCustomer}</CardTitle>
+            <CardTitle>Statement for {selectedCustomer?.name}</CardTitle>
           </CardHeader>
           <CardContent>
             {loadingStatement ? (
@@ -246,7 +263,7 @@ export default function StatementsPage() {
                 </TableBody>
               </Table>
             ) : (
-              <p>No invoices found for this customer.</p>
+              <p className="text-center py-8 text-muted-foreground">No invoices found for this customer.</p>
             )}
           </CardContent>
            {customerInvoices.length > 0 && (
@@ -260,7 +277,7 @@ export default function StatementsPage() {
         </Card>
       )}
       
-       {!selectedCustomer && (
+       {!selectedCustomerId && (
          <div className="text-center py-16 text-muted-foreground">
             <Users className="mx-auto h-12 w-12" />
             <p className="mt-4 text-lg">Please select a customer to view their statement.</p>

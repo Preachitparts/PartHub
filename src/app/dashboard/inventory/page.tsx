@@ -609,7 +609,7 @@ export default function InventoryPage() {
                   <Button variant="outline" onClick={() => { setIsFormDialogOpen(false); form.reset(); }}>Cancel</Button>
                   <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
                       {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      {dialogMode === 'add' ? 'Save Full Invoice' : 'Update Supplier Info'}
+                      {dialogMode === 'add' ? 'Save Full Invoice' : 'Save All'}
                   </Button>
               </DialogFooter>
           </DialogContent>
@@ -737,5 +737,3 @@ export default function InventoryPage() {
     </div>
   );
 }
-
-    

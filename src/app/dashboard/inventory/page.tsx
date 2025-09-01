@@ -400,7 +400,7 @@ export default function InventoryPage() {
             title: "Import Successful",
             description: `Successfully imported ${invoiceItems.length} parts and created a new Tax Invoice.`,
           });
-          fetchData();
+          fetchData(); // This was the missing piece
         } catch (error) {
            console.error("Error importing CSV:", error);
            toast({
@@ -416,6 +416,7 @@ export default function InventoryPage() {
         }
       },
       error: (error: any) => {
+        setIsSaving(false);
         toast({
           variant: "destructive",
           title: "Import Error",
@@ -667,5 +668,3 @@ export default function InventoryPage() {
     </div>
   );
 }
-
-    

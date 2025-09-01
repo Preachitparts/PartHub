@@ -307,7 +307,7 @@ export default function InventoryPage() {
                 finalItemData.isNew = false; // It's no longer new
                 stockAdjustment = itemToSave.quantity; // Stock is just the new quantity
             } else if (itemToSave.partId) { // Updating an existing part
-                 const partRef = doc(db, "parts", itemTo-save.partId);
+                 const partRef = doc(db, "parts", itemToSave.partId);
                  const originalQty = originalItem ? originalItem.quantity : 0;
                  stockAdjustment = itemToSave.quantity - originalQty;
                  transaction.update(partRef, { stock: increment(stockAdjustment) });

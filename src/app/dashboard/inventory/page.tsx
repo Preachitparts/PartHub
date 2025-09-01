@@ -48,8 +48,8 @@ const taxInvoiceItemSchema = z.object({
     partId: z.string().optional(),
     name: z.string().min(1, "Part name is required."),
     partNumber: z.string().min(1, "Part number is required."),
-    price: z.preprocess((a) => parseFloat(z.string().parse(a)), z.number().min(0, "Price must be a positive number.")),
-    quantity: z.preprocess((a) => parseInt(z.string().parse(a), 10), z.number().int().min(1, "Quantity must be at least 1.")),
+    price: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number().min(0, "Price must be a positive number.")),
+    quantity: z.preprocess((a) => parseInt(z.string().parse(a || "0"), 10), z.number().int().min(1, "Quantity must be at least 1.")),
     isNew: z.boolean().default(false),
 });
 
@@ -157,7 +157,7 @@ export default function InventoryPage() {
                 quantity: 1,
                 isNew: false,
             });
-            form.setValue(`items.${index}.price`, selectedPart.price); // Ensure price is updated in the form state
+            form.setValue(`items.${index}.price`, selectedPart.price, { shouldDirty: true });
         }
     }
   };
@@ -215,6 +215,7 @@ export default function InventoryPage() {
       const invoiceRef = doc(db, "taxInvoices", invoiceId);
 
       const invoiceItems: TaxInvoiceItem[] = [];
+      const currentTotalAmount = data.items.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0);
       
       for (const item of data.items) {
           let partId = item.partId;
@@ -242,7 +243,7 @@ export default function InventoryPage() {
     
       const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
           invoiceId, supplierName: data.supplierName, supplierInvoiceNumber: data.invoiceNumber || '',
-          date: Timestamp.now(), totalAmount, items: invoiceItems,
+          date: Timestamp.now(), totalAmount: currentTotalAmount, items: invoiceItems,
       };
 
       batch.set(invoiceRef, newTaxInvoice);
@@ -268,7 +269,6 @@ export default function InventoryPage() {
         const originalItemsMap = new Map(originalInvoice.items.map(item => [item.partId, item]));
         const updatedItems = data.items;
 
-        // Calculate stock adjustments by comparing old and new quantities
         const stockAdjustments = new Map<string, number>();
 
         // For original items, find their new quantity or assume 0 if removed
@@ -301,7 +301,6 @@ export default function InventoryPage() {
                     tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
                 };
                 transaction.set(newPartRef, newPartData);
-                // No stock adjustment needed here, as it's a new part creation.
             }
         }
         
@@ -309,8 +308,6 @@ export default function InventoryPage() {
         for (const [partId, adjustment] of stockAdjustments.entries()) {
             if (adjustment !== 0) {
                 const partRef = doc(db, "parts", partId);
-                // We need to ensure the part exists before trying to increment.
-                // This is safe within a transaction.
                 transaction.update(partRef, { stock: increment(adjustment) });
             }
         }
@@ -321,10 +318,12 @@ export default function InventoryPage() {
             isNew: false // Mark all items as not new after saving
         }));
 
+        const currentTotalAmount = data.items.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0);
+
         const updatedInvoiceData = {
             supplierName: data.supplierName,
             supplierInvoiceNumber: data.invoiceNumber || '',
-            totalAmount: totalAmount,
+            totalAmount: currentTotalAmount,
             items: finalUpdatedItems,
         };
         transaction.update(invoiceRef, updatedInvoiceData);
@@ -561,10 +560,10 @@ export default function InventoryPage() {
                                               <Input placeholder="Part Number" {...form.register(`items.${index}.partNumber`)} disabled={!currentItem.isNew} />
                                           </TableCell>
                                           <TableCell>
-                                              <Input type="number" step="0.01" {...form.register(`items.${index}.price`)} />
+                                              <Input type="number" step="0.01" {...form.register(`items.${index}.price`, { valueAsNumber: true })} />
                                           </TableCell>
                                           <TableCell>
-                                              <Input type="number" {...form.register(`items.${index}.quantity`)} />
+                                              <Input type="number" {...form.register(`items.${index}.quantity`, { valueAsNumber: true })} />
                                           </TableCell>
                                           <TableCell>
                                               <Button variant="ghost" size="icon" onClick={() => remove(index)}>
@@ -724,5 +723,3 @@ export default function InventoryPage() {
     </div>
   );
 }
-
-    

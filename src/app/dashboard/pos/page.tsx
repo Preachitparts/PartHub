@@ -190,11 +190,13 @@ export default function POSPage() {
     setCart((currentCart) => currentCart.filter((item) => item.id !== partId));
   };
   
-  const {total, balanceDue} = useMemo(() => {
-    const total = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
-    const balanceDue = total - paidAmount;
-    return { total, balanceDue };
+  const {subtotal, total, balanceDue} = useMemo(() => {
+    const subtotal = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
+    const total = subtotal; // No tax
+    const balanceDue = subtotal - paidAmount;
+    return { subtotal, total, balanceDue };
   }, [cart, paidAmount]);
+
 
   useEffect(() => {
     setPaidAmount(total);
@@ -246,51 +248,65 @@ export default function POSPage() {
     const invoiceNumber = `INV-${Date.now().toString().slice(-8)}`;
 
     try {
-        await runTransaction(db, async (transaction) => {
-            for (const item of cart) {
-                const partRef = doc(db, "parts", item.id);
-                const partDoc = await transaction.get(partRef);
-                if (!partDoc.exists()) throw new Error(`Part ${item.name} not found.`);
-                const currentStock = partDoc.data().stock;
-                if (currentStock < item.quantity) {
-                    throw new Error(`Not enough stock for ${item.name}. Available: ${currentStock}, Requested: ${item.quantity}`);
-                }
-                transaction.update(partRef, { stock: increment(-item.quantity) });
-            }
+      await runTransaction(db, async (transaction) => {
+        // 1. READ all part documents first.
+        const partRefs = cart.map(item => doc(db, "parts", item.id));
+        const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
 
-            const invoiceRef = doc(db, "invoices", invoiceNumber);
-            const finalBalanceDue = total - paidAmount;
-            const status = finalBalanceDue <= 0 ? 'Paid' : 'Unpaid';
-            const invoiceToSave: Omit<Invoice, 'id'> = {
-                invoiceNumber: invoiceNumber,
-                customerId: selectedCustomer.id,
-                customerName: selectedCustomer.name,
-                customerAddress: selectedCustomer.address || '',
-                customerPhone: selectedCustomer.phone || '',
-                invoiceDate: new Date().toISOString().split("T")[0],
-                dueDate,
-                status,
-                items: cart.map(i => ({
-                    partId: i.id, partName: i.name, partNumber: i.partNumber,
-                    quantity: i.quantity, unitPrice: i.salePrice,
-                    total: i.salePrice * i.quantity,
-                })),
-                total: total,
-                paidAmount: paidAmount,
-                balanceDue: finalBalanceDue,
-            };
-            transaction.set(invoiceRef, invoiceToSave);
-        });
+        // 2. VALIDATE stock for all items.
+        for (let i = 0; i < cart.length; i++) {
+          const partDoc = partDocs[i];
+          const cartItem = cart[i];
+          if (!partDoc.exists()) {
+            throw new Error(`Part ${cartItem.name} not found.`);
+          }
+          const currentStock = partDoc.data().stock;
+          if (currentStock < cartItem.quantity) {
+            throw new Error(`Not enough stock for ${cartItem.name}. Available: ${currentStock}, Requested: ${cartItem.quantity}`);
+          }
+        }
+        
+        // 3. WRITE all updates last.
+        for (let i = 0; i < cart.length; i++) {
+          const partRef = partRefs[i];
+          const cartItem = cart[i];
+          transaction.update(partRef, { stock: increment(-cartItem.quantity) });
+        }
 
-        await logActivity(`Completed sale for invoice ${invoiceNumber} to ${selectedCustomer.name}.`);
-        toast({ title: "Sale Complete!", description: `Invoice ${invoiceNumber} created and stock updated.` });
-        
-        setCart([]);
-        setSelectedCustomerId("");
-        setSearchTerm("");
-        setPaidAmount(0);
-        
-        router.push('/dashboard/invoices');
+        const invoiceRef = doc(db, "invoices", invoiceNumber);
+        const finalBalanceDue = subtotal - paidAmount;
+        const status = finalBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+        const invoiceToSave: Omit<Invoice, 'id'> = {
+            invoiceNumber: invoiceNumber,
+            customerId: selectedCustomer.id,
+            customerName: selectedCustomer.name,
+            customerAddress: selectedCustomer.address || '',
+            customerPhone: selectedCustomer.phone || '',
+            invoiceDate: new Date().toISOString().split("T")[0],
+            dueDate,
+            status,
+            items: cart.map(i => ({
+                partId: i.id, partName: i.name, partNumber: i.partNumber,
+                quantity: i.quantity, unitPrice: i.salePrice,
+                total: i.salePrice * i.quantity,
+            })),
+            subtotal,
+            total,
+            paidAmount: paidAmount,
+            balanceDue: finalBalanceDue,
+        };
+        transaction.set(invoiceRef, invoiceToSave);
+      });
+
+      await logActivity(`Completed sale for invoice ${invoiceNumber} to ${selectedCustomer.name}.`);
+      toast({ title: "Sale Complete!", description: `Invoice ${invoiceNumber} created and stock updated.` });
+      
+      setCart([]);
+      setSelectedCustomerId("");
+      setSearchTerm("");
+      setPaidAmount(0);
+      
+      router.push('/dashboard/invoices');
 
     } catch (error: any) {
         console.error("Error completing sale:", error);
@@ -468,7 +484,7 @@ export default function POSPage() {
               </Table>
             </div>
             <div className="mt-2 space-y-2 text-sm">
-                <div className="flex justify-between font-bold text-base"><span>Total</span><span>GHS {total.toFixed(2)}</span></div>
+                <div className="flex justify-between font-bold text-base"><span>Subtotal</span><span>GHS {subtotal.toFixed(2)}</span></div>
                 <div className="flex justify-between items-center">
                     <Label htmlFor="paidAmount">Amount Paid</Label>
                     <Input id="paidAmount" type="number" step="0.01" className="w-32" value={paidAmount} onChange={(e) => setPaidAmount(parseFloat(e.target.value) || 0)} />

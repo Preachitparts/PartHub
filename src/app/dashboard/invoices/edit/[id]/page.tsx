@@ -178,17 +178,7 @@ export default function EditInvoicePage() {
     let newUnitPrice = item.unitPrice;
 
     if (field === 'quantity') {
-      const selectedPart = parts.find((p) => p.id === item.partId);
-      if (selectedPart && parsedValue > selectedPart.stock) {
-        toast({
-          variant: "destructive",
-          title: "Stock limit exceeded",
-          description: `Only ${selectedPart.stock} units of ${selectedPart.name} available.`,
-        });
-        newQuantity = selectedPart.stock;
-      } else {
-        newQuantity = parsedValue < 1 ? 1 : parsedValue;
-      }
+      newQuantity = parsedValue < 1 ? 1 : parsedValue;
     } else { // unitPrice
         newUnitPrice = parsedValue;
     }
@@ -219,7 +209,7 @@ export default function EditInvoicePage() {
     
     const newTotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
     const newBalanceDue = newTotal - data.paidAmount;
-    const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
+    const newStatus = newBalanceDue <= 0 ? 'Paid' : (originalInvoice.status === 'Overdue' ? 'Overdue' : 'Unpaid');
 
     const finalInvoiceData: Omit<Invoice, "id" | "createdAt"> = {
         invoiceNumber: data.invoiceNumber,
@@ -240,49 +230,46 @@ export default function EditInvoicePage() {
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
+
+            // --- 1. Calculate Stock Adjustments ---
+            const stockChanges = new Map<string, number>();
+
+            // Add back original quantities to stock
+            originalInvoice.items.forEach(item => {
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
+            });
+
+            // Subtract new quantities from stock
+            data.items.forEach(item => {
+                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
+            });
             
-            // --- READ FIRST ---
-            const originalItemsMap = new Map<string, number>(originalInvoice.items.map(item => [item.partId, item.quantity]));
-            const newItemsMap = new Map<string, number>(data.items.map(item => [item.partId, item.quantity]));
-            
-            const allPartIds = new Set([...originalItemsMap.keys(), ...newItemsMap.keys()]);
+            // --- 2. READ all part documents first ---
+            const allPartIds = new Set([...originalInvoice.items.map(i => i.partId), ...data.items.map(i => i.partId)]);
             const partRefs = Array.from(allPartIds).map(partId => doc(db, "parts", partId));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
             const partsData = new Map<string, Part>();
-            
             partDocs.forEach((partDoc) => {
                 if (partDoc.exists()) {
                     partsData.set(partDoc.id, partDoc.data() as Part);
+                } else {
+                    // This case should ideally not be hit if parts aren't deleted
+                    throw new Error(`Part with ID ${partDoc.id} not found.`);
                 }
             });
 
-            // --- VALIDATE AND CALCULATE STOCK CHANGES ---
-            const stockChanges = new Map<string, number>();
-
-            // Calculate changes based on original invoice
-            for (const [partId, originalQty] of originalItemsMap.entries()) {
-                const newQty = newItemsMap.get(partId) || 0;
-                const change = originalQty - newQty; // Return stock if qty reduced, take stock if increased
-                if(change !== 0) stockChanges.set(partId, change);
-            }
-             // Calculate changes for new items in edited invoice
-            for (const [partId, newQty] of newItemsMap.entries()) {
-                if (!originalItemsMap.has(partId)) {
-                    stockChanges.set(partId, -newQty); // New item, so decrement stock
-                }
-            }
-            
+            // --- 3. VALIDATE final stock levels ---
             for (const [partId, change] of stockChanges.entries()) {
                 const partData = partsData.get(partId);
-                if (!partData) throw new Error(`Part with ID ${partId} not found.`);
+                if (!partData) continue; // Should have been caught above, but as a safeguard.
                 
-                // If we are taking from stock, check if we have enough
-                if(change < 0 && partData.stock < Math.abs(change)) {
-                    throw new Error(`Not enough stock for ${partData.name}. Available: ${partData.stock}, Required: ${Math.abs(change)} more.`);
+                const finalStock = partData.stock + change;
+                if (finalStock < 0) {
+                     throw new Error(`Not enough stock for ${partData.name}. Required: ${Math.abs(change - partData.stock)}, Available: ${partData.stock}.`);
                 }
             }
 
-            // --- WRITE LAST ---
+            // --- 4. WRITE all updates last ---
             for (const [partId, change] of stockChanges.entries()) {
                const partRef = doc(db, "parts", partId);
                transaction.update(partRef, { stock: increment(change) });
@@ -353,7 +340,6 @@ export default function EditInvoicePage() {
                                     placeholder="Select a customer..."
                                     searchPlaceholder="Search customers..."
                                     emptyPlaceholder="No customers found."
-                                    onOpenAutoFocus={(e) => e.preventDefault()}
                                 />
                             </div>
                         </FormControl>
@@ -412,7 +398,6 @@ export default function EditInvoicePage() {
                                           placeholder="Select a part..."
                                           searchPlaceholder="Search by name or part number..."
                                           emptyPlaceholder="No parts found."
-                                          onOpenAutoFocus={(e) => e.preventDefault()}
                                       />
                                   </FormControl>
                                   <FormMessage />
@@ -501,3 +486,5 @@ export default function EditInvoicePage() {
     </>
   );
 }
+
+    

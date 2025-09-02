@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, doc, runTransaction, query, where, orderBy, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, query, where, orderBy, serverTimestamp, setDoc, getDocsFromCache } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,14 +78,15 @@ export default function PaymentsPage() {
         await runTransaction(db, async (transaction) => {
             let amountToDistribute = data.amount;
 
-            // Simpler query to avoid composite index requirement
+            // Simplified query to avoid composite index requirement
             const customerInvoicesQuery = query(
                 collection(db, "invoices"),
                 where("customerId", "==", selectedCustomer.id),
                 where("status", "in", ["Unpaid", "Overdue"])
             );
 
-            const unpaidInvoicesSnapshot = await getDocs(customerInvoicesQuery);
+            // Important: Use transaction.get() for reads inside a transaction
+            const unpaidInvoicesSnapshot = await transaction.get(customerInvoicesQuery);
             
             // Sort by date client-side
             const unpaidInvoices = unpaidInvoicesSnapshot.docs
@@ -97,10 +98,7 @@ export default function PaymentsPage() {
                 if (amountToDistribute <= 0) break;
                 
                 const invoiceRef = doc(db, "invoices", invoice.id);
-                // No need to get the doc again, we have it
-                // const invoiceData = invoiceDoc.data() as Invoice;
                 const balanceDue = invoice.balanceDue || 0;
-
                 const paymentAmount = Math.min(amountToDistribute, balanceDue);
                 
                 const newPaidAmount = (invoice.paidAmount || 0) + paymentAmount;
@@ -183,3 +181,5 @@ export default function PaymentsPage() {
     </div>
   );
 }
+
+    

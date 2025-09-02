@@ -225,10 +225,9 @@ export default function InventoryPage() {
     const invoiceRef = doc(db, "taxInvoices", invoiceId);
 
     const invoiceItems: TaxInvoiceItem[] = [];
-    const currentTotalAmount = data.items.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0);
     
     for (const item of data.items) {
-        let finalItem: TaxInvoiceItem = { ...item };
+        let finalItem: TaxInvoiceItem = { ...item, isNew: false }; // Always set isNew to false for the stored item
 
         if (item.isNew && !item.partId) {
             const newPartRef = doc(collection(db, 'parts'));
@@ -243,7 +242,6 @@ export default function InventoryPage() {
             batch.set(newPartRef, newPartData);
             
             finalItem.partId = newPartRef.id;
-            finalItem.isNew = false; // It's no longer "new" once it's in the DB
         } else if (item.partId) {
             const partRef = doc(db, "parts", item.partId);
             batch.update(partRef, { stock: increment(item.quantity) });
@@ -251,10 +249,12 @@ export default function InventoryPage() {
 
         invoiceItems.push(finalItem);
     }
+    
+    const finalTotalAmount = invoiceItems.reduce((total, item) => total + (item.price * item.quantity), 0);
   
     const newTaxInvoice: Omit<TaxInvoice, 'id'> = {
         invoiceId, supplierName: data.supplierName, supplierInvoiceNumber: data.invoiceNumber || '',
-        date: Timestamp.now(), totalAmount: currentTotalAmount, items: invoiceItems,
+        date: Timestamp.now(), totalAmount: finalTotalAmount, items: invoiceItems,
     };
 
     batch.set(invoiceRef, newTaxInvoice);
@@ -266,11 +266,72 @@ export default function InventoryPage() {
     if (!data.id) throw new Error("Invoice ID is missing for update.");
     const invoiceRef = doc(db, "taxInvoices", data.id);
     // This function now only updates invoice-level details, not items.
-    await updateDoc(invoiceRef, {
-        supplierName: data.supplierName,
-        supplierInvoiceNumber: data.invoiceNumber || '',
+    // Item updates are handled by handleSaveItem.
+    // But we should also allow saving all items at once.
+    
+    const originalInvoiceDoc = await getDoc(invoiceRef);
+    if (!originalInvoiceDoc.exists()) throw new Error("Original invoice not found.");
+    const originalInvoice = originalInvoiceDoc.data() as TaxInvoice;
+    
+    await runTransaction(db, async (transaction) => {
+        // Handle changes in invoice-level details
+        transaction.update(invoiceRef, {
+            supplierName: data.supplierName,
+            supplierInvoiceNumber: data.invoiceNumber || '',
+        });
+
+        // Handle item changes
+        const stockAdjustments = new Map<string, number>();
+
+        // Revert original quantities
+        originalInvoice.items.forEach(item => {
+            if (item.partId) {
+                stockAdjustments.set(item.partId, (stockAdjustments.get(item.partId) || 0) - item.quantity);
+            }
+        });
+
+        const newItems: TaxInvoiceItem[] = [];
+        for (const item of data.items) {
+            let finalItem = { ...item };
+            if (item.isNew && !item.partId) {
+                // Create new part
+                const newPartRef = doc(collection(db, 'parts'));
+                const newPartId = newPartRef.id;
+                const tax = item.price * TAX_RATE;
+                const exFactPrice = item.price + tax;
+                const newPartData: Omit<Part, 'id'> = {
+                    name: item.name, partNumber: item.partNumber, partCode: item.partNumber,
+                    description: '', price: item.price, stock: 0, taxable: true, // stock starts at 0, will be incremented
+                    tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
+                    pricingType: 'exclusive'
+                };
+                transaction.set(newPartRef, newPartData);
+                finalItem.partId = newPartId;
+                finalItem.isNew = false;
+            }
+
+            if (finalItem.partId) {
+                stockAdjustments.set(finalItem.partId, (stockAdjustments.get(finalItem.partId) || 0) + item.quantity);
+            }
+            newItems.push(finalItem);
+        }
+
+        // Apply stock adjustments
+        for (const [partId, adjustment] of stockAdjustments.entries()) {
+            const partRef = doc(db, "parts", partId);
+            transaction.update(partRef, { stock: increment(adjustment) });
+        }
+
+        const newTotalAmount = newItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+        
+        transaction.update(invoiceRef, {
+            items: newItems,
+            totalAmount: newTotalAmount,
+            date: Timestamp.now() // Update date to reflect changes
+        });
     });
-    await logActivity(`Updated supplier info for tax invoice from ${data.supplierName}.`);
+
+    await logActivity(`Updated tax invoice from ${data.supplierName}.`);
   }
 
   const handleDeleteInvoice = async () => {
@@ -322,7 +383,7 @@ export default function InventoryPage() {
 
             const invoiceData = invoiceDoc.data() as TaxInvoice;
             const originalItems = invoiceData.items;
-            const originalItem = originalItems.find(it => it.partId === itemToSave.partId);
+            const originalItem = originalItems.find(it => it.partId === itemToSave.partId && !it.isNew);
 
             let stockAdjustment = 0;
             let finalItemData = { ...itemToSave };
@@ -353,10 +414,13 @@ export default function InventoryPage() {
                  await logActivity(`Adjusted stock for '${itemToSave.name}' by ${stockAdjustment} via tax invoice edit.`);
             }
 
-            const updatedItems = originalItems.map(item => item.partId === finalItemData.partId ? finalItemData : item);
-            if (!originalItem && finalItemData.partId) { // Item was not in the original list
+            let updatedItems = [...originalItems];
+            if (originalItem) { // If item existed, update it
+                updatedItems = originalItems.map(item => item.partId === finalItemData.partId ? finalItemData : item);
+            } else if (finalItemData.partId) { // If item is new, add it
                 updatedItems.push(finalItemData);
             }
+
 
             const newTotalAmount = updatedItems.reduce((total, item) => total + (item.price * item.quantity), 0);
 
@@ -651,7 +715,7 @@ export default function InventoryPage() {
                   <Button variant="outline" onClick={() => { setIsFormDialogOpen(false); form.reset(); }}>Cancel</Button>
                   <Button type="submit" form="tax-invoice-form" disabled={isSaving}>
                       {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      {dialogMode === 'add' ? 'Save Full Invoice' : 'Save All'}
+                      {dialogMode === 'add' ? 'Save Full Invoice' : 'Save All Changes'}
                   </Button>
               </DialogFooter>
           </DialogContent>
@@ -806,5 +870,3 @@ export default function InventoryPage() {
     </div>
   );
 }
-
-    

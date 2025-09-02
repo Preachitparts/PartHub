@@ -84,10 +84,10 @@ export default function PriceManagementPage() {
 
         if (priceChanged) {
           const updates: Partial<Part> = {};
-          updates.price = part.newPrice;
+          updates.price = part.newPrice!;
           updates.previousPrice = part.price;
           
-          batch.update(partRef, updates);
+          batch.update(partRef, updates as any);
           
           logActivity(`Updated price for ${part.name} from GH₵${part.price.toFixed(2)} to GH₵${part.newPrice!.toFixed(2)}.`);
           updatedPricesCount++;
@@ -127,7 +127,7 @@ export default function PriceManagementPage() {
         <CardHeader>
           <CardTitle>Part Prices</CardTitle>
           <CardDescription>
-            Update the price for individual parts.
+            Update the price for individual parts. Previous price is shown for reference.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -142,6 +142,7 @@ export default function PriceManagementPage() {
                   <TableRow>
                     <TableHead className="w-[30%]">Part Name</TableHead>
                     <TableHead>Part Number</TableHead>
+                    <TableHead className="text-right">Current Price</TableHead>
                     <TableHead className="text-right">Previous Price</TableHead>
                     <TableHead className="w-[150px] text-right">New Price</TableHead>
                   </TableRow>
@@ -151,8 +152,11 @@ export default function PriceManagementPage() {
                     <TableRow key={part.id}>
                       <TableCell className="font-medium">{part.name}</TableCell>
                       <TableCell>{part.partNumber}</TableCell>
+                       <TableCell className="text-right font-medium">
+                        GH₵{part.price.toFixed(2)}
+                      </TableCell>
                       <TableCell className="text-right text-muted-foreground">
-                        {part.previousPrice ? `GH₵${part.previousPrice.toFixed(2)}` : `GH₵${part.price.toFixed(2)}`}
+                        {part.previousPrice ? `GH₵${part.previousPrice.toFixed(2)}` : `N/A`}
                       </TableCell>
                       <TableCell className="text-right">
                         <Input

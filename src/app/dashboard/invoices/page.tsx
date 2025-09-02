@@ -157,14 +157,14 @@ export default function InvoicesPage() {
         // Company Info
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text("Preach it Parts & Equipment", 140, 22);
+        doc.text("Preach it Parts & Equipment", 200, 22, { align: 'right' });
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
-        doc.text("Call/WhatsApp: +233 24 885 7278 / +233 24 376 2748", 140, 28);
-        doc.text("preachitenterprise81@yahoo.com", 140, 33);
-        doc.text("preachitenterprise_mq@yahoo.com", 140, 38);
-        doc.text("Loc: Tarkwa Tamso & Takoradi", 140, 43);
-        doc.text("www.preachitpartsandequipment.com", 140, 48);
+        doc.text("Call/WhatsApp: +233 24 885 7278 / +233 24 376 2748", 200, 28, { align: 'right' });
+        doc.text("preachitenterprise81@yahoo.com", 200, 33, { align: 'right' });
+        doc.text("preachitenterprise_mq@yahoo.com", 200, 38, { align: 'right' });
+        doc.text("Loc: Tarkwa Tamso & Takoradi", 200, 43, { align: 'right' });
+        doc.text("www.preachitpartsandequipment.com", 200, 48, { align: 'right' });
 
         // Customer Info
         yPos = 55;
@@ -222,6 +222,11 @@ export default function InvoicesPage() {
             startY: yPos + 10,
             headStyles: { fillColor: [41, 128, 185] },
             styles: { fontSize: 9 },
+            didParseCell: function (data) {
+                if (data.column.dataKey === 2 || data.column.dataKey === 3 || data.column.dataKey === 4) {
+                     data.cell.styles.halign = 'right';
+                }
+            }
         });
 
         // Totals
@@ -231,12 +236,18 @@ export default function InvoicesPage() {
             finalY = 20;
         }
 
+        const totalsX = 200;
         doc.setFontSize(10);
-        doc.text(`Subtotal: GHS ${(invoice.subtotal || 0).toFixed(2)}`, 140, finalY + 15);
-        doc.text(`Paid: GHS ${(invoice.paidAmount || 0).toFixed(2)}`, 140, finalY + 20);
+        doc.text(`Subtotal:`, totalsX - 10, finalY + 15, { align: 'right' });
+        doc.text(`GHS ${(invoice.total || 0).toFixed(2)}`, totalsX, finalY + 15, { align: 'right' });
+        
+        doc.text(`Paid:`, totalsX - 10, finalY + 21, { align: 'right' });
+        doc.text(`GHS ${(invoice.paidAmount || 0).toFixed(2)}`, totalsX, finalY + 21, { align: 'right' });
+
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
-        doc.text(`Balance Due: GHS ${(invoice.balanceDue || 0).toFixed(2)}`, 140, finalY + 27);
+        doc.text(`Balance Due:`, totalsX - 10, finalY + 28, { align: 'right' });
+        doc.text(`GHS ${(invoice.balanceDue || 0).toFixed(2)}`, totalsX, finalY + 28, { align: 'right' });
         doc.setFont('helvetica', 'normal');
 
         // Footer
@@ -476,7 +487,7 @@ export default function InvoicesPage() {
                             <div className="w-full max-w-xs space-y-2">
                                   <div className="flex justify-between">
                                     <span>Subtotal</span>
-                                    <span>GHS {(selectedInvoice.subtotal || 0).toFixed(2)}</span>
+                                    <span>GHS {(selectedInvoice.total || 0).toFixed(2)}</span>
                                  </div>
                                   <div className="flex justify-between text-destructive">
                                     <span>Amount Paid</span>

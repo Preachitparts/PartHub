@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { collection, getDocs, query, where, orderBy, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, query, where, orderBy, doc, getDoc, Timestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Loader2, Download, Users, FileText, File } from "lucide-react";
-import type { Invoice, Customer } from "@/types";
+import type { Invoice, Customer, Payment } from "@/types";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 import { useToast } from "@/hooks/use-toast";
 import jsPDF from 'jspdf';
@@ -39,10 +39,12 @@ interface StatementTransaction {
     debit: number;
     credit: number;
     balance: number;
+    timestamp: number;
 }
 
 export default function StatementsPage() {
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
+  const [allPayments, setAllPayments] = useState<Payment[]>([]);
   const [statementTransactions, setStatementTransactions] = useState<StatementTransaction[]>([]);
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
@@ -55,10 +57,15 @@ export default function StatementsPage() {
     const fetchInitialData = async () => {
       setLoading(true);
       try {
-        const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "asc"));
-        const querySnapshot = await getDocs(invoicesQuery);
-        const invoicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
+        const invoicesQuery = query(collection(db, "invoices"), orderBy("createdAt", "asc"));
+        const invoicesSnapshot = await getDocs(invoicesQuery);
+        const invoicesList = invoicesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
         setAllInvoices(invoicesList);
+        
+        const paymentsQuery = query(collection(db, "payments"), orderBy("paymentDate", "asc"));
+        const paymentsSnapshot = await getDocs(paymentsQuery);
+        const paymentsList = paymentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Payment));
+        setAllPayments(paymentsList);
 
         const customersQuery = query(collection(db, "customers"), orderBy("name"));
         const customersSnapshot = await getDocs(customersQuery);
@@ -95,33 +102,41 @@ export default function StatementsPage() {
         setSelectedCustomer(customerDoc.data() as Customer);
     }
 
-    const filteredInvoices = allInvoices.filter(inv => inv.customerId === customerId);
+    const customerInvoices = allInvoices.filter(inv => inv.customerId === customerId);
+    const customerPayments = allPayments.filter(p => p.customerId === customerId);
 
     let runningBalance = 0;
     const transactions: StatementTransaction[] = [];
     
-    filteredInvoices.forEach(invoice => {
-        // Add the invoice total as a debit
-        runningBalance += invoice.total;
+    customerInvoices.forEach(invoice => {
         transactions.push({
             date: invoice.invoiceDate,
             transaction: `Invoice #${invoice.invoiceNumber}`,
             debit: invoice.total,
             credit: 0,
-            balance: runningBalance
+            balance: 0, // temp value
+            timestamp: (invoice.createdAt as Timestamp)?.toDate().getTime() || new Date(invoice.invoiceDate).getTime()
         });
+    });
 
-        // Add the payment as a credit if it exists
-        if (invoice.paidAmount > 0) {
-            runningBalance -= invoice.paidAmount;
-            transactions.push({
-                date: invoice.invoiceDate, // Assuming payment date is same as invoice date for simplicity
-                transaction: `Payment for #${invoice.invoiceNumber}`,
-                debit: 0,
-                credit: invoice.paidAmount,
-                balance: runningBalance
-            });
-        }
+    customerPayments.forEach(payment => {
+        transactions.push({
+            date: payment.paymentDate,
+            transaction: `Payment Received`,
+            debit: 0,
+            credit: payment.amount,
+            balance: 0, // temp value
+            timestamp: new Date(payment.paymentDate).getTime()
+        });
+    });
+
+    // Sort all transactions by date
+    transactions.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Calculate running balance
+    transactions.forEach(t => {
+        runningBalance = runningBalance + t.debit - t.credit;
+        t.balance = runningBalance;
     });
 
     setStatementTransactions(transactions);
@@ -162,18 +177,44 @@ export default function StatementsPage() {
     if (statementTransactions.length === 0 || !selectedCustomer) return;
     const doc = new jsPDF() as jsPDFWithAutoTable;
     
-    doc.setFontSize(18);
-    doc.text(`Statement for ${selectedCustomer.name}`, 14, 22);
+    // Header
+    doc.setFontSize(22);
+    doc.setFont('helvetica', 'bold');
+    doc.text("STATEMENT", 14, 22);
     
-    doc.setFontSize(11);
-    doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 30);
+    // Company Info
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text("Preach it Parts & Equipment", 200, 22, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text("Call/WhatsApp: +233 24 885 7278 / +233 24 376 2748", 200, 28, { align: 'right' });
+    doc.text("preachitenterprise81@yahoo.com", 200, 33, { align: 'right' });
+    doc.text("preachitenterprise_mq@yahoo.com", 200, 38, { align: 'right' });
+    doc.text("Loc: Tarkwa Tamso & Takoradi", 200, 43, { align: 'right' });
+    doc.text("www.preachitpartsandequipment.com", 200, 48, { align: 'right' });
+
+    // Customer Info
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text("Statement For:", 14, 60);
+    doc.setFont('helvetica', 'normal');
+    doc.text(selectedCustomer.name, 14, 66);
+     if (selectedCustomer.address) {
+        doc.text(selectedCustomer.address, 14, 71);
+    }
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Date Issued:`, 140, 60);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${new Date().toLocaleDateString()}`, 165, 60);
     
     const tableColumn = ["Date", "Transaction", "Debit", "Credit", "Balance"];
     const tableRows: any[] = [];
     
     statementTransactions.forEach(t => {
       const row = [
-        t.date,
+        new Date(t.date).toLocaleDateString(),
         t.transaction,
         t.debit > 0 ? `GHS ${t.debit.toFixed(2)}` : '',
         t.credit > 0 ? `GHS ${t.credit.toFixed(2)}` : '',
@@ -185,7 +226,9 @@ export default function StatementsPage() {
     doc.autoTable({
         head: [tableColumn],
         body: tableRows,
-        startY: 40,
+        startY: 80,
+        headStyles: { fillColor: [41, 128, 185] },
+        styles: { fontSize: 9 },
         didParseCell: function (data) {
             if (data.column.dataKey === 2 || data.column.dataKey === 3 || data.column.dataKey === 4) {
                  data.cell.styles.halign = 'right';
@@ -194,9 +237,10 @@ export default function StatementsPage() {
     });
 
     const finalY = (doc as any).autoTable.previous.finalY;
-    doc.setFontSize(14);
+    doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Total Balance Due: GHS ${totalBalanceDue.toFixed(2)}`, 200, finalY + 15, { align: 'right' });
+    doc.text(`Total Balance Due:`, 200, finalY + 15, { align: 'right' });
+    doc.text(`GHS ${totalBalanceDue.toFixed(2)}`, 200, finalY + 22, { align: 'right' });
 
     doc.save(`statement_${selectedCustomer.name.replace(/\s+/g, '_')}.pdf`);
   };
@@ -244,6 +288,9 @@ export default function StatementsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Statement for {selectedCustomer?.name}</CardTitle>
+             <CardDescription>
+                A summary of all invoices and payments for this customer.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {loadingStatement ? (
@@ -264,7 +311,7 @@ export default function StatementsPage() {
                 <TableBody>
                   {statementTransactions.map((transaction, index) => (
                     <TableRow key={index}>
-                      <TableCell>{transaction.date}</TableCell>
+                      <TableCell>{new Date(transaction.date).toLocaleDateString()}</TableCell>
                       <TableCell className="font-medium">{transaction.transaction}</TableCell>
                       <TableCell className="text-right">{transaction.debit > 0 ? `GHS ${transaction.debit.toFixed(2)}` : '-'}</TableCell>
                       <TableCell className="text-right text-green-600">{transaction.credit > 0 ? `GHS ${transaction.credit.toFixed(2)}` : '-'}</TableCell>
@@ -297,5 +344,6 @@ export default function StatementsPage() {
 
     </div>
   );
+}
 
     

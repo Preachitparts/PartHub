@@ -58,7 +58,6 @@ export interface Invoice {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   items: InvoiceItem[];
-  subtotal: number;
   total: number;
   paidAmount: number;
   balanceDue: number;
@@ -71,6 +70,14 @@ export interface Customer {
     address: string;
     createdAt: Timestamp;
     balance: number; // This is a client-side calculated field
+}
+
+export interface Payment {
+    id: string;
+    customerId: string;
+    amount: number;
+    paymentDate: string; // Stored as 'YYYY-MM-DD'
+    createdAt: Timestamp;
 }
 
 

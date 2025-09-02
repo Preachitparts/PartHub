@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, orderBy, query } from "firebase/firestore";
+import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, orderBy, query, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import type { Part, Invoice, Customer, InvoiceItem } from "@/types";
@@ -227,13 +227,9 @@ export default function NewInvoicePage() {
 
     try {
         await runTransaction(db, async (transaction) => {
-            const invoiceRef = doc(db, "invoices", data.invoiceNumber);
-
-            // 1. READ all part documents first to validate stock
             const partRefs = data.items.map(item => doc(db, "parts", item.partId));
             const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
 
-            // 2. VALIDATE stock for all items
             for (let i = 0; i < data.items.length; i++) {
                 const partDoc = partDocs[i];
                 const item = data.items[i];
@@ -246,7 +242,6 @@ export default function NewInvoicePage() {
                 }
             }
 
-            // 3. WRITE all updates if validation passes
             for (let i = 0; i < data.items.length; i++) {
                 const partRef = partRefs[i];
                 const item = data.items[i];
@@ -273,7 +268,9 @@ export default function NewInvoicePage() {
                 balanceDue: data.balanceDue,
                 createdAt: serverTimestamp()
             };
-            transaction.set(invoiceRef, invoiceToSave);
+            
+            const invoiceCollectionRef = collection(db, "invoices");
+            transaction.set(doc(invoiceCollectionRef, data.invoiceNumber), invoiceToSave);
         });
 
       await logActivity(`Created sales invoice ${data.invoiceNumber} for ${selectedCustomer.name}.`);
@@ -550,3 +547,5 @@ export default function NewInvoicePage() {
     </>
   );
 }
+
+    

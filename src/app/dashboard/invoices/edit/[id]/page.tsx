@@ -168,23 +168,21 @@ export default function EditInvoicePage() {
   };
 
   const handleItemChange = (index: number, field: 'quantity' | 'unitPrice', value: string) => {
-    const parsedValue = field === 'quantity' ? parseInt(value, 10) : parseFloat(value);
-    if (isNaN(parsedValue)) return;
-
     const currentItems = invoiceForm.getValues('items');
-    const item = currentItems[index];
+    const item = { ...currentItems[index] };
 
-    let newQuantity = item.quantity;
-    let newUnitPrice = item.unitPrice;
-
-    if (field === 'quantity') {
-      newQuantity = parsedValue < 1 ? 1 : parsedValue;
-    } else { // unitPrice
-        newUnitPrice = parsedValue;
+    let numericValue = 0;
+    if (value !== '') {
+        numericValue = field === 'quantity' ? parseInt(value, 10) : parseFloat(value);
+        if (isNaN(numericValue)) {
+            numericValue = 0;
+        }
     }
-
-    const total = newUnitPrice * newQuantity;
-    update(index, { ...item, quantity: newQuantity, unitPrice: newUnitPrice, total });
+    
+    item[field] = numericValue;
+    item.total = item.quantity * item.unitPrice;
+    
+    update(index, item);
   };
 
 
@@ -207,75 +205,59 @@ export default function EditInvoicePage() {
         return;
     }
     
-    const newTotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    const newBalanceDue = newTotal - data.paidAmount;
-    const newStatus = newBalanceDue <= 0 ? 'Paid' : (originalInvoice.status === 'Overdue' ? 'Overdue' : 'Unpaid');
-
-    const finalInvoiceData: Omit<Invoice, "id" | "createdAt"> = {
-        invoiceNumber: data.invoiceNumber,
-        customerId: data.customerId,
-        invoiceDate: data.invoiceDate,
-        dueDate: data.dueDate,
-        paidAmount: data.paidAmount,
-        items: data.items,
-        customerName: selectedCustomer.name || '',
-        customerAddress: selectedCustomer.address || '',
-        customerPhone: selectedCustomer.phone || '',
-        total: newTotal,
-        balanceDue: newBalanceDue,
-        status: newStatus,
-        updatedAt: serverTimestamp(),
-    };
-
     try {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
 
-            // --- 1. Calculate Stock Adjustments ---
-            const stockChanges = new Map<string, number>();
+            // 1. REVERT stock from original invoice items
+            for (const item of originalInvoice.items) {
+                const partRef = doc(db, "parts", item.partId);
+                transaction.update(partRef, { stock: increment(item.quantity) });
+            }
 
-            // Add back original quantities to stock
-            originalInvoice.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
-            });
+            // 2. READ current stock for new items and VALIDATE
+            const newPartRefs = data.items.map(item => doc(db, "parts", item.partId));
+            const newPartDocs = await Promise.all(newPartRefs.map(ref => transaction.get(ref)));
 
-            // Subtract new quantities from stock
-            data.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
-            });
-            
-            // --- 2. READ all part documents first ---
-            const allPartIds = new Set([...originalInvoice.items.map(i => i.partId), ...data.items.map(i => i.partId)]);
-            const partRefs = Array.from(allPartIds).map(partId => doc(db, "parts", partId));
-            const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
-            const partsData = new Map<string, Part>();
-            partDocs.forEach((partDoc) => {
-                if (partDoc.exists()) {
-                    partsData.set(partDoc.id, partDoc.data() as Part);
-                } else {
-                    // This case should ideally not be hit if parts aren't deleted
-                    throw new Error(`Part with ID ${partDoc.id} not found.`);
+            for(let i = 0; i < data.items.length; i++) {
+                const partDoc = newPartDocs[i];
+                const item = data.items[i];
+                if (!partDoc.exists()) {
+                    throw new Error(`Part ${item.partName} not found.`);
                 }
-            });
-
-            // --- 3. VALIDATE final stock levels ---
-            for (const [partId, change] of stockChanges.entries()) {
-                const partData = partsData.get(partId);
-                if (!partData) continue; // Should have been caught above, but as a safeguard.
-                
-                const finalStock = partData.stock + change;
-                if (finalStock < 0) {
-                     throw new Error(`Not enough stock for ${partData.name}. Required: ${Math.abs(change - partData.stock)}, Available: ${partData.stock}.`);
+                const currentStock = partDoc.data().stock;
+                if (currentStock < item.quantity) {
+                    throw new Error(`Not enough stock for ${item.partName}. Available: ${currentStock}, Requested: ${item.quantity}.`);
                 }
             }
 
-            // --- 4. WRITE all updates last ---
-            for (const [partId, change] of stockChanges.entries()) {
-               const partRef = doc(db, "parts", partId);
-               transaction.update(partRef, { stock: increment(change) });
+            // 3. DEDUCT stock for new items
+            for (let i = 0; i < data.items.length; i++) {
+                const partRef = newPartRefs[i];
+                const item = data.items[i];
+                transaction.update(partRef, { stock: increment(-item.quantity) });
             }
             
-            transaction.set(invoiceRef, finalInvoiceData, { merge: true });
+            // 4. UPDATE the invoice document
+            const newTotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+            const newBalanceDue = newTotal - data.paidAmount;
+            const newStatus = newBalanceDue <= 0 ? 'Paid' : (originalInvoice.status === 'Overdue' ? 'Overdue' : 'Unpaid');
+
+            const finalInvoiceData: Partial<Invoice> = {
+                customerId: data.customerId,
+                invoiceDate: data.invoiceDate,
+                dueDate: data.dueDate,
+                paidAmount: data.paidAmount,
+                items: data.items,
+                customerName: selectedCustomer.name || '',
+                customerAddress: selectedCustomer.address || '',
+                customerPhone: selectedCustomer.phone || '',
+                total: newTotal,
+                balanceDue: newBalanceDue,
+                status: newStatus,
+                updatedAt: serverTimestamp(),
+            };
+            transaction.update(invoiceRef, finalInvoiceData);
         });
 
         toast({ title: "Invoice Updated", description: "All changes have been saved successfully." });
@@ -285,6 +267,9 @@ export default function EditInvoicePage() {
     } catch (error: any) {
         console.error("Error saving invoice:", error);
         toast({ variant: "destructive", title: "Save Failed", description: error.message });
+        
+        // Re-fetch data to revert optimistic UI changes on failure
+        fetchInitialData();
     } finally {
         setIsSaving(false);
     }

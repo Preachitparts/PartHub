@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useMemo } from "react";
-import { collection, getDocs, setDoc, doc, writeBatch, increment, Timestamp, query, orderBy, getDoc, updateDoc, runTransaction } from "firebase/firestore";
+import { collection, getDocs, setDoc, doc, writeBatch, increment, Timestamp, query, orderBy, getDoc, updateDoc, runTransaction, deleteDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/table";
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -30,6 +29,7 @@ import {
   DialogTitle,
   DialogClose,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlusCircle, Loader2, Upload, Download, Trash2, Eye, Pencil, Save } from "lucide-react";
@@ -70,6 +70,8 @@ export default function InventoryPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [invoiceToDelete, setInvoiceToDelete] = useState<TaxInvoice | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoice | null>(null);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -236,6 +238,7 @@ export default function InventoryPage() {
                 name: item.name, partNumber: item.partNumber, partCode: item.partNumber, 
                 description: '', price: item.price, stock: item.quantity, taxable: true,
                 tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
+                pricingType: 'exclusive'
             };
             batch.set(newPartRef, newPartData);
             
@@ -270,6 +273,37 @@ export default function InventoryPage() {
     await logActivity(`Updated supplier info for tax invoice from ${data.supplierName}.`);
   }
 
+  const handleDeleteInvoice = async () => {
+    if (!invoiceToDelete) return;
+    setIsDeleting(true);
+
+    try {
+        await runTransaction(db, async (transaction) => {
+            const invoiceRef = doc(db, "taxInvoices", invoiceToDelete.id);
+            
+            for (const item of invoiceToDelete.items) {
+                if (item.partId) {
+                    const partRef = doc(db, "parts", item.partId);
+                    // Decrement stock since we are deleting an incoming stock record
+                    transaction.update(partRef, { stock: increment(-item.quantity) });
+                }
+            }
+
+            transaction.delete(invoiceRef);
+        });
+
+        toast({ title: "Invoice Deleted", description: `Invoice ${invoiceToDelete.invoiceId} has been deleted.` });
+        await logActivity(`Deleted tax invoice ${invoiceToDelete.invoiceId}.`);
+        setInvoiceToDelete(null);
+        fetchData(); // Refresh data
+    } catch (error: any) {
+        console.error("Failed to delete invoice:", error);
+        toast({ variant: "destructive", title: "Deletion Failed", description: error.message });
+    } finally {
+        setIsDeleting(false);
+    }
+  };
+
   const handleSaveItem = async (index: number) => {
     const itemToSave = form.getValues(`items.${index}`);
     const invoiceId = form.getValues('id');
@@ -303,6 +337,7 @@ export default function InventoryPage() {
                     name: itemToSave.name, partNumber: itemToSave.partNumber, partCode: itemToSave.partNumber,
                     description: '', price: itemToSave.price, stock: itemToSave.quantity, taxable: true,
                     tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
+                    pricingType: 'exclusive'
                 };
                 transaction.set(newPartRef, newPartData);
                 
@@ -429,6 +464,7 @@ export default function InventoryPage() {
                     category: row['Category'] || row['category'] || '',
                     equipmentModel: row['Equipment Model'] || row['EquipmentModel'] || row['equipmentModel'] || '',
                     imageUrl: row['Image URL'] || row['ImageURL'] || row['imageUrl'] || "https://placehold.co/600x400",
+                    pricingType: 'exclusive'
                 };
 
                 batch.set(partRef, newPartData);
@@ -621,57 +657,81 @@ export default function InventoryPage() {
           </DialogContent>
       </Dialog>
       
-      <Card>
-        <CardHeader>
-          <CardTitle>Received Goods (Tax Invoices)</CardTitle>
-          <CardDescription>
-            A history of all stock received from suppliers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="flex justify-center items-center h-64">
-              <Loader2 className="h-12 w-12 animate-spin text-primary" />
-            </div>
-          ) : taxInvoices.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Invoice ID</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Total Amount</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {taxInvoices.map((invoice) => (
-                  <TableRow key={invoice.id}>
-                    <TableCell className="font-medium">{invoice.invoiceId}</TableCell>
-                    <TableCell>{invoice.supplierName}</TableCell>
-                    <TableCell>{invoice.date.toDate().toLocaleDateString()}</TableCell>
-                    <TableCell className="text-right">
-                      GH₵{invoice.totalAmount.toFixed(2)}
-                    </TableCell>
-                    <TableCell>
-                       <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
-                            <Eye className="h-4 w-4" />
-                       </Button>
-                       <Button variant="ghost" size="icon" onClick={() => handleEditInvoice(invoice)}>
-                            <Pencil className="h-4 w-4" />
-                       </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-             <div className="text-center py-10">
-                <p className="text-muted-foreground">No tax invoices have been recorded yet.</p>
-             </div>
-          )}
-        </CardContent>
-      </Card>
+      <AlertDialog>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+                This action cannot be undone. This will permanently delete the tax invoice
+                and reduce the stock quantities for all items on it.
+            </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setInvoiceToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteInvoice} disabled={isDeleting}>
+                {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Continue
+            </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+
+        <Card>
+            <CardHeader>
+            <CardTitle>Received Goods (Tax Invoices)</CardTitle>
+            <CardDescription>
+                A history of all stock received from suppliers.
+            </CardDescription>
+            </CardHeader>
+            <CardContent>
+            {loading ? (
+                <div className="flex justify-center items-center h-64">
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                </div>
+            ) : taxInvoices.length > 0 ? (
+                <Table>
+                <TableHeader>
+                    <TableRow>
+                    <TableHead>Invoice ID</TableHead>
+                    <TableHead>Supplier</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead className="text-right">Total Amount</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
+                    </TableRow>
+                </TableHeader>
+                <TableBody>
+                    {taxInvoices.map((invoice) => (
+                    <TableRow key={invoice.id}>
+                        <TableCell className="font-medium">{invoice.invoiceId}</TableCell>
+                        <TableCell>{invoice.supplierName}</TableCell>
+                        <TableCell>{invoice.date.toDate().toLocaleDateString()}</TableCell>
+                        <TableCell className="text-right">
+                        GH₵{invoice.totalAmount.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                            <Button variant="ghost" size="icon" onClick={() => handleViewInvoice(invoice)}>
+                                <Eye className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => handleEditInvoice(invoice)}>
+                                <Pencil className="h-4 w-4" />
+                            </Button>
+                            <AlertDialogTrigger asChild>
+                                <Button variant="ghost" size="icon" onClick={() => setInvoiceToDelete(invoice)}>
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                            </AlertDialogTrigger>
+                        </TableCell>
+                    </TableRow>
+                    ))}
+                </TableBody>
+                </Table>
+            ) : (
+                <div className="text-center py-10">
+                    <p className="text-muted-foreground">No tax invoices have been recorded yet.</p>
+                </div>
+            )}
+            </CardContent>
+        </Card>
+      </AlertDialog>
 
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
         <DialogContent className="sm:max-w-3xl">
@@ -746,3 +806,5 @@ export default function InventoryPage() {
     </div>
   );
 }
+
+    

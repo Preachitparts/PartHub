@@ -226,12 +226,10 @@ export default function InventoryPage() {
     const currentTotalAmount = data.items.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 0)), 0);
     
     for (const item of data.items) {
-        let currentItem = { ...item };
-        let partId = item.partId;
+        let finalItem: TaxInvoiceItem = { ...item };
 
         if (item.isNew) {
             const newPartRef = doc(collection(db, 'parts'));
-            partId = newPartRef.id;
             const tax = item.price * TAX_RATE;
             const exFactPrice = item.price + tax;
             const newPartData: Omit<Part, 'id'> = {
@@ -240,20 +238,15 @@ export default function InventoryPage() {
                 tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
             };
             batch.set(newPartRef, newPartData);
-            currentItem.partId = partId; // Ensure the new partId is set for the invoice item
-        } else if (partId) {
-            const partRef = doc(db, "parts", partId);
+            
+            finalItem.partId = newPartRef.id;
+            finalItem.isNew = false; // It's no longer "new" once it's in the DB
+        } else if (item.partId) {
+            const partRef = doc(db, "parts", item.partId);
             batch.update(partRef, { stock: increment(item.quantity) });
         }
 
-        invoiceItems.push({
-            partId: currentItem.partId, 
-            name: currentItem.name, 
-            partNumber: currentItem.partNumber,
-            price: currentItem.price, 
-            quantity: currentItem.quantity, 
-            isNew: currentItem.isNew
-        });
+        invoiceItems.push(finalItem);
     }
   
     const newTaxInvoice: Omit<TaxInvoice, 'id'> = {

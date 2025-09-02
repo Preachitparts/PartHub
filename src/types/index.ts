@@ -58,6 +58,7 @@ export interface Invoice {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   items: InvoiceItem[];
+  subtotal: number;
   total: number;
   paidAmount: number;
   balanceDue: number;
@@ -78,3 +79,5 @@ export interface ActivityLog {
     description: string;
     date: Timestamp;
 }
+
+    

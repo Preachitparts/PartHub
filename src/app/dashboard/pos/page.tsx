@@ -294,6 +294,7 @@ export default function POSPage() {
             total,
             paidAmount: paidAmount,
             balanceDue: finalBalanceDue,
+            createdAt: serverTimestamp()
         };
         transaction.set(invoiceRef, invoiceToSave);
       });
@@ -394,7 +395,7 @@ export default function POSPage() {
                   </TableHeader>
                   <TableBody>
                     {filteredParts.map((part) => (
-                      <TableRow key={part.id}>
+                      <TableRow key={part.id} onClick={() => addToCart(part)} className="cursor-pointer">
                         <TableCell className="flex items-center gap-4">
                            <Image src={part.imageUrl} alt={part.name} width={40} height={40} className="rounded-md object-cover" data-ai-hint="equipment part" />
                            <div>
@@ -405,7 +406,7 @@ export default function POSPage() {
                         <TableCell>{part.stock}</TableCell>
                         <TableCell className="text-right">GHS {part.price.toFixed(2)}</TableCell>
                         <TableCell className="text-right">
-                          <Button size="sm" onClick={() => addToCart(part)} disabled={part.stock === 0}>
+                          <Button size="sm" onClick={(e) => { e.stopPropagation(); addToCart(part); }} disabled={part.stock === 0}>
                             <PlusCircle className="h-4 w-4" />
                           </Button>
                         </TableCell>
@@ -504,3 +505,5 @@ export default function POSPage() {
     </>
   );
 }
+
+    

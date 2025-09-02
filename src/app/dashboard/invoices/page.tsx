@@ -161,11 +161,13 @@ export default function InvoicesPage() {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
         doc.text("Call/WhatsApp: +233 24 885 7278 / +233 24 376 2748", 140, 28);
-        doc.text("Loc: Tarkwa Tamso & Takoradi", 140, 33);
-        doc.text("www.preachitpartsandequipment.com", 140, 38);
+        doc.text("preachitenterprise81@yahoo.com", 140, 33);
+        doc.text("preachitenterprise_mq@yahoo.com", 140, 38);
+        doc.text("Loc: Tarkwa Tamso & Takoradi", 140, 43);
+        doc.text("www.preachitpartsandequipment.com", 140, 48);
 
         // Customer Info
-        yPos = 45;
+        yPos = 55;
         doc.setFontSize(10);
         doc.setFont('helvetica', 'bold');
         doc.text("Bill To:", 14, yPos);
@@ -190,13 +192,13 @@ export default function InvoicesPage() {
 
         // Invoice Details
         doc.setFont('helvetica', 'bold');
-        doc.text(`Invoice #:`, 140, 51);
-        doc.text(`Date:`, 140, 56);
-        doc.text(`Due Date:`, 140, 61);
+        doc.text(`Invoice #:`, 140, 61);
+        doc.text(`Date:`, 140, 66);
+        doc.text(`Due Date:`, 140, 71);
         doc.setFont('helvetica', 'normal');
-        doc.text(`${invoice.invoiceNumber}`, 165, 51);
-        doc.text(`${new Date(invoice.invoiceDate).toLocaleDateString()}`, 165, 56);
-        doc.text(`${new Date(invoice.dueDate).toLocaleDateString()}`, 165, 61);
+        doc.text(`${invoice.invoiceNumber}`, 165, 61);
+        doc.text(`${new Date(invoice.invoiceDate).toLocaleDateString()}`, 165, 66);
+        doc.text(`${new Date(invoice.dueDate).toLocaleDateString()}`, 165, 71);
         
 
         // Table
@@ -230,7 +232,7 @@ export default function InvoicesPage() {
         }
 
         doc.setFontSize(10);
-        doc.text(`Total: GHS ${(invoice.total || 0).toFixed(2)}`, 140, finalY + 15);
+        doc.text(`Subtotal: GHS ${(invoice.subtotal || 0).toFixed(2)}`, 140, finalY + 15);
         doc.text(`Paid: GHS ${(invoice.paidAmount || 0).toFixed(2)}`, 140, finalY + 20);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
@@ -473,8 +475,8 @@ export default function InvoicesPage() {
                         <div className="flex justify-end mt-4">
                             <div className="w-full max-w-xs space-y-2">
                                   <div className="flex justify-between">
-                                    <span>Total Amount</span>
-                                    <span>GHS {(selectedInvoice.total || 0).toFixed(2)}</span>
+                                    <span>Subtotal</span>
+                                    <span>GHS {(selectedInvoice.subtotal || 0).toFixed(2)}</span>
                                  </div>
                                   <div className="flex justify-between text-destructive">
                                     <span>Amount Paid</span>
@@ -503,3 +505,5 @@ export default function InvoicesPage() {
         </div>
     );
 }
+
+    

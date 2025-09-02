@@ -8,7 +8,7 @@ import * as z from "zod";
 import { collection, getDocs, doc, runTransaction, increment, addDoc, serverTimestamp, orderBy, query } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
-import type { Part, Invoice, Customer } from "@/types";
+import type { Part, Invoice, Customer, InvoiceItem } from "@/types";
 import { logActivity } from "@/lib/activity-log";
 
 import { Button } from "@/components/ui/button";
@@ -229,18 +229,27 @@ export default function NewInvoicePage() {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", data.invoiceNumber);
 
-            for (const item of data.items) {
-                const partRef = doc(db, "parts", item.partId);
-                const partDoc = await transaction.get(partRef);
-                if (!partDoc.exists()) throw new Error(`Part ${item.partName} not found.`);
+            // 1. READ all part documents first to validate stock
+            const partRefs = data.items.map(item => doc(db, "parts", item.partId));
+            const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
+
+            // 2. VALIDATE stock for all items
+            for (let i = 0; i < data.items.length; i++) {
+                const partDoc = partDocs[i];
+                const item = data.items[i];
+                if (!partDoc.exists()) {
+                    throw new Error(`Part ${item.partName} not found.`);
+                }
                 const currentStock = partDoc.data().stock;
                 if (currentStock < item.quantity) {
                     throw new Error(`Not enough stock for ${item.partName}. Available: ${currentStock}, Requested: ${item.quantity}`);
                 }
             }
 
-            for (const item of data.items) {
-                const partRef = doc(db, "parts", item.partId);
+            // 3. WRITE all updates if validation passes
+            for (let i = 0; i < data.items.length; i++) {
+                const partRef = partRefs[i];
+                const item = data.items[i];
                 transaction.update(partRef, { stock: increment(-item.quantity) });
             }
 
@@ -262,6 +271,7 @@ export default function NewInvoicePage() {
                 total: data.total,
                 paidAmount: data.paidAmount,
                 balanceDue: data.balanceDue,
+                createdAt: serverTimestamp()
             };
             transaction.set(invoiceRef, invoiceToSave);
         });

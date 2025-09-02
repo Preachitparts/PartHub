@@ -84,6 +84,7 @@ export default function EditInvoicePage() {
     resolver: zodResolver(invoiceSchema),
     defaultValues: {
       paidAmount: 0,
+      items: [],
     }
   });
 
@@ -142,17 +143,14 @@ export default function EditInvoicePage() {
   const watchPaidAmount = invoiceForm.watch("paidAmount");
 
   const { total, balanceDue } = useMemo(() => {
-    const currentItems = invoiceForm.getValues("items") || [];
-    const currentPaidAmount = invoiceForm.getValues("paidAmount") || 0;
-
-    const total = currentItems.reduce(
+    const currentTotal = watchItems.reduce(
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
     );
-    const balanceDueValue = total - currentPaidAmount;
+    const balanceDueValue = currentTotal - (watchPaidAmount || 0);
     
-    return { total, balanceDue: balanceDueValue };
-  }, [watchItems, watchPaidAmount, invoiceForm]);
+    return { total: currentTotal, balanceDue: balanceDueValue };
+  }, [watchItems, watchPaidAmount]);
 
   const handlePartChange = (index: number, partId: string) => {
     const selectedPart = parts.find((p) => p.id === partId);
@@ -169,29 +167,36 @@ export default function EditInvoicePage() {
     }
   };
 
-  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice', value: number) => {
-    const item = invoiceForm.getValues(`items.${index}`);
-    if (!item) return;
+  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice', value: string) => {
+    const parsedValue = field === 'quantity' ? parseInt(value, 10) : parseFloat(value);
+    if (isNaN(parsedValue)) return;
 
-    let currentItem = { ...item, [field]: value };
-    
+    const currentItems = invoiceForm.getValues('items');
+    const item = currentItems[index];
+
+    let newQuantity = item.quantity;
+    let newUnitPrice = item.unitPrice;
+
     if (field === 'quantity') {
-        const selectedPart = parts.find((p) => p.id === item.partId);
-        if (selectedPart && value > selectedPart.stock) {
-             toast({
-                variant: "destructive",
-                title: "Stock limit exceeded",
-                description: `Only ${selectedPart.stock} units of ${selectedPart.name} available.`,
-            });
-            currentItem.quantity = selectedPart.stock;
-        }
-        if (value < 1) currentItem.quantity = 1;
+      const selectedPart = parts.find((p) => p.id === item.partId);
+      if (selectedPart && parsedValue > selectedPart.stock) {
+        toast({
+          variant: "destructive",
+          title: "Stock limit exceeded",
+          description: `Only ${selectedPart.stock} units of ${selectedPart.name} available.`,
+        });
+        newQuantity = selectedPart.stock;
+      } else {
+        newQuantity = parsedValue < 1 ? 1 : parsedValue;
+      }
+    } else { // unitPrice
+        newUnitPrice = parsedValue;
     }
 
-    const total = (currentItem.unitPrice || 0) * (currentItem.quantity || 1);
-    
-    update(index, { ...currentItem, total });
+    const total = newUnitPrice * newQuantity;
+    update(index, { ...item, quantity: newQuantity, unitPrice: newUnitPrice, total });
   };
+
 
   const addNewItem = () => {
     append({ partId: "", quantity: 1, unitPrice: 0, total: 0, partName: '', partNumber: '' });
@@ -212,18 +217,17 @@ export default function EditInvoicePage() {
         return;
     }
     
-    const formData = invoiceForm.getValues();
-    const newTotal = formData.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    const newBalanceDue = newTotal - formData.paidAmount;
+    const newTotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+    const newBalanceDue = newTotal - data.paidAmount;
     const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
 
     const finalInvoiceData: Omit<Invoice, "id" | "createdAt"> = {
-        invoiceNumber: formData.invoiceNumber,
-        customerId: formData.customerId,
-        invoiceDate: formData.invoiceDate,
-        dueDate: formData.dueDate,
-        paidAmount: formData.paidAmount,
-        items: formData.items,
+        invoiceNumber: data.invoiceNumber,
+        customerId: data.customerId,
+        invoiceDate: data.invoiceDate,
+        dueDate: data.dueDate,
+        paidAmount: data.paidAmount,
+        items: data.items,
         customerName: selectedCustomer.name || '',
         customerAddress: selectedCustomer.address || '',
         customerPhone: selectedCustomer.phone || '',
@@ -237,33 +241,49 @@ export default function EditInvoicePage() {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
             
+            // --- READ FIRST ---
+            const originalItemsMap = new Map<string, number>(originalInvoice.items.map(item => [item.partId, item.quantity]));
+            const newItemsMap = new Map<string, number>(data.items.map(item => [item.partId, item.quantity]));
+            
+            const allPartIds = new Set([...originalItemsMap.keys(), ...newItemsMap.keys()]);
+            const partRefs = Array.from(allPartIds).map(partId => doc(db, "parts", partId));
+            const partDocs = await Promise.all(partRefs.map(ref => transaction.get(ref)));
+            const partsData = new Map<string, Part>();
+            
+            partDocs.forEach((partDoc) => {
+                if (partDoc.exists()) {
+                    partsData.set(partDoc.id, partDoc.data() as Part);
+                }
+            });
+
+            // --- VALIDATE AND CALCULATE STOCK CHANGES ---
             const stockChanges = new Map<string, number>();
 
-            originalInvoice.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
-            });
-
-            finalInvoiceData.items.forEach(item => {
-                stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
-            });
-            
-            const partRefsToUpdate = Array.from(stockChanges.keys()).filter(partId => stockChanges.get(partId) !== 0);
-            
-            for (const partId of partRefsToUpdate) {
-                const change = stockChanges.get(partId)!;
-                if (change < 0) {
-                    const partRef = doc(db, "parts", partId);
-                    const partDoc = await transaction.get(partRef);
-                    if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
-                    const currentStock = partDoc.data().stock;
-                    if (currentStock < Math.abs(change)) {
-                        throw new Error(`Not enough stock for ${partDoc.data().name}. Available: ${currentStock}, Required: ${Math.abs(change)} more.`);
-                    }
+            // Calculate changes based on original invoice
+            for (const [partId, originalQty] of originalItemsMap.entries()) {
+                const newQty = newItemsMap.get(partId) || 0;
+                const change = originalQty - newQty; // Return stock if qty reduced, take stock if increased
+                if(change !== 0) stockChanges.set(partId, change);
+            }
+             // Calculate changes for new items in edited invoice
+            for (const [partId, newQty] of newItemsMap.entries()) {
+                if (!originalItemsMap.has(partId)) {
+                    stockChanges.set(partId, -newQty); // New item, so decrement stock
                 }
             }
             
-            for (const partId of partRefsToUpdate) {
-               const change = stockChanges.get(partId)!;
+            for (const [partId, change] of stockChanges.entries()) {
+                const partData = partsData.get(partId);
+                if (!partData) throw new Error(`Part with ID ${partId} not found.`);
+                
+                // If we are taking from stock, check if we have enough
+                if(change < 0 && partData.stock < Math.abs(change)) {
+                    throw new Error(`Not enough stock for ${partData.name}. Available: ${partData.stock}, Required: ${Math.abs(change)} more.`);
+                }
+            }
+
+            // --- WRITE LAST ---
+            for (const [partId, change] of stockChanges.entries()) {
                const partRef = doc(db, "parts", partId);
                transaction.update(partRef, { stock: increment(change) });
             }
@@ -401,21 +421,21 @@ export default function EditInvoicePage() {
                           />
                         </TableCell>
                         <TableCell>
-                          <Input
-                            type="number"
-                            {...invoiceForm.register(`items.${index}.quantity`)}
-                            onChange={(e) => handleItemChange(index, 'quantity', parseInt(e.target.value) || 0)}
-                            className="w-20"
-                          />
+                           <Input
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                              className="w-20"
+                            />
                         </TableCell>
                         <TableCell>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            {...invoiceForm.register(`items.${index}.unitPrice`)}
-                            onChange={(e) => handleItemChange(index, 'unitPrice', parseFloat(e.target.value) || 0)}
-                            className="w-24"
-                          />
+                           <Input
+                              type="number"
+                              step="0.01"
+                              value={item.unitPrice}
+                              onChange={(e) => handleItemChange(index, 'unitPrice', e.target.value)}
+                              className="w-24"
+                            />
                         </TableCell>
                         <TableCell className="text-right">
                           GHS {item?.total?.toFixed(2) || '0.00'}

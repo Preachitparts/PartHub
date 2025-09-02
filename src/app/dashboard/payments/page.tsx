@@ -78,28 +78,34 @@ export default function PaymentsPage() {
         await runTransaction(db, async (transaction) => {
             let amountToDistribute = data.amount;
 
+            // Simpler query to avoid composite index requirement
             const customerInvoicesQuery = query(
                 collection(db, "invoices"),
                 where("customerId", "==", selectedCustomer.id),
-                where("balanceDue", ">", 0),
-                orderBy("balanceDue", "asc"),
-                orderBy("invoiceDate", "asc")
+                where("status", "in", ["Unpaid", "Overdue"])
             );
 
             const unpaidInvoicesSnapshot = await getDocs(customerInvoicesQuery);
+            
+            // Sort by date client-side
+            const unpaidInvoices = unpaidInvoicesSnapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() as Invoice}))
+                .sort((a, b) => new Date(a.invoiceDate).getTime() - new Date(b.invoiceDate).getTime());
 
-            for (const invoiceDoc of unpaidInvoicesSnapshot.docs) {
+
+            for (const invoice of unpaidInvoices) {
                 if (amountToDistribute <= 0) break;
                 
-                const invoiceRef = doc(db, "invoices", invoiceDoc.id);
-                const invoiceData = invoiceDoc.data() as Invoice;
-                const balanceDue = invoiceData.balanceDue || 0;
+                const invoiceRef = doc(db, "invoices", invoice.id);
+                // No need to get the doc again, we have it
+                // const invoiceData = invoiceDoc.data() as Invoice;
+                const balanceDue = invoice.balanceDue || 0;
 
                 const paymentAmount = Math.min(amountToDistribute, balanceDue);
                 
-                const newPaidAmount = (invoiceData.paidAmount || 0) + paymentAmount;
+                const newPaidAmount = (invoice.paidAmount || 0) + paymentAmount;
                 const newBalanceDue = balanceDue - paymentAmount;
-                const newStatus = newBalanceDue <= 0 ? 'Paid' : invoiceData.status;
+                const newStatus = newBalanceDue <= 0 ? 'Paid' : invoice.status;
 
                 transaction.update(invoiceRef, {
                     paidAmount: newPaidAmount,

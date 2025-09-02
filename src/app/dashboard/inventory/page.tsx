@@ -228,7 +228,7 @@ export default function InventoryPage() {
     for (const item of data.items) {
         let finalItem: TaxInvoiceItem = { ...item };
 
-        if (item.isNew) {
+        if (item.isNew && !item.partId) {
             const newPartRef = doc(collection(db, 'parts'));
             const tax = item.price * TAX_RATE;
             const exFactPrice = item.price + tax;
@@ -714,9 +714,9 @@ export default function InventoryPage() {
                                 <TableRow key={index}>
                                     <TableCell>{item.name}</TableCell>
                                     <TableCell>{item.partNumber}</TableCell>
-                                    <TableCell className="text-right">GH₵{item.price.toFixed(2)}</TableCell>
+                                    <TableCell className="text-right">GH₵{(item.price || 0).toFixed(2)}</TableCell>
                                     <TableCell className="text-right">{item.quantity}</TableCell>
-                                    <TableCell className="text-right">GH₵{(item.price * item.quantity).toFixed(2)}</TableCell>
+                                    <TableCell className="text-right">GH₵{((item.price || 0) * item.quantity).toFixed(2)}</TableCell>
                                 </TableRow>
                             ))}
                         </TableBody>

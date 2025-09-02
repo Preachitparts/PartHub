@@ -49,8 +49,8 @@ const taxInvoiceItemSchema = z.object({
     partId: z.string().optional(),
     name: z.string().min(1, "Part name is required."),
     partNumber: z.string().min(1, "Part number is required."),
-    price: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number().min(0, "Price must be a positive number.")),
-    quantity: z.preprocess((a) => parseInt(z.string().parse(a || "0"), 10), z.number().int().min(1, "Quantity must be at least 1.")),
+    price: z.preprocess((val) => Number(val), z.number().min(0, "Price must be a positive number.")),
+    quantity: z.preprocess((val) => Number(val), z.number().int().min(1, "Quantity must be at least 1.")),
     isNew: z.boolean().default(false),
 });
 
@@ -710,15 +710,18 @@ export default function InventoryPage() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {selectedInvoice.items.map((item, index) => (
+                            {selectedInvoice.items.map((item, index) => {
+                                const price = item.price || 0;
+                                const quantity = item.quantity || 0;
+                                return (
                                 <TableRow key={index}>
                                     <TableCell>{item.name}</TableCell>
                                     <TableCell>{item.partNumber}</TableCell>
-                                    <TableCell className="text-right">GH₵{(item.price || 0).toFixed(2)}</TableCell>
-                                    <TableCell className="text-right">{item.quantity}</TableCell>
-                                    <TableCell className="text-right">GH₵{((item.price || 0) * item.quantity).toFixed(2)}</TableCell>
+                                    <TableCell className="text-right">GH₵{price.toFixed(2)}</TableCell>
+                                    <TableCell className="text-right">{quantity}</TableCell>
+                                    <TableCell className="text-right">GH₵{(price * quantity).toFixed(2)}</TableCell>
                                 </TableRow>
-                            ))}
+                            )})}
                         </TableBody>
                      </Table>
                 </div>

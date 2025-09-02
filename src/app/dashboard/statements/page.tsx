@@ -25,8 +25,6 @@ import { Loader2, Download, Users, FileText, File } from "lucide-react";
 import type { Invoice, Customer } from "@/types";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 import { useToast } from "@/hooks/use-toast";
-import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import Papa from "papaparse";
@@ -35,9 +33,17 @@ interface jsPDFWithAutoTable extends jsPDF {
   autoTable: (options: any) => jsPDF;
 }
 
+interface StatementTransaction {
+    date: string;
+    transaction: string;
+    debit: number;
+    credit: number;
+    balance: number;
+}
+
 export default function StatementsPage() {
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
-  const [customerInvoices, setCustomerInvoices] = useState<Invoice[]>([]);
+  const [statementTransactions, setStatementTransactions] = useState<StatementTransaction[]>([]);
   const [customerOptions, setCustomerOptions] = useState<ComboboxOption[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
@@ -49,7 +55,7 @@ export default function StatementsPage() {
     const fetchInitialData = async () => {
       setLoading(true);
       try {
-        const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "desc"));
+        const invoicesQuery = query(collection(db, "invoices"), orderBy("invoiceDate", "asc"));
         const querySnapshot = await getDocs(invoicesQuery);
         const invoicesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invoice));
         setAllInvoices(invoicesList);
@@ -78,7 +84,7 @@ export default function StatementsPage() {
   const handleCustomerChange = async (customerId: string) => {
     setSelectedCustomerId(customerId);
     if (!customerId) {
-        setCustomerInvoices([]);
+        setStatementTransactions([]);
         setSelectedCustomer(null);
         return;
     }
@@ -89,40 +95,53 @@ export default function StatementsPage() {
         setSelectedCustomer(customerDoc.data() as Customer);
     }
 
-    const filteredInvoices = allInvoices
-      .filter(inv => inv.customerId === customerId)
-      .sort((a, b) => new Date(b.invoiceDate).getTime() - new Date(a.invoiceDate).getTime());
+    const filteredInvoices = allInvoices.filter(inv => inv.customerId === customerId);
 
-    const updatedInvoices = filteredInvoices.map(inv => {
-        const dueDate = new Date(inv.dueDate);
-        const today = new Date();
-        today.setHours(0,0,0,0);
-        let status = inv.status;
-        if (status === 'Unpaid' && dueDate < today) {
-            status = 'Overdue';
+    let runningBalance = 0;
+    const transactions: StatementTransaction[] = [];
+    
+    filteredInvoices.forEach(invoice => {
+        // Add the invoice total as a debit
+        runningBalance += invoice.total;
+        transactions.push({
+            date: invoice.invoiceDate,
+            transaction: `Invoice #${invoice.invoiceNumber}`,
+            debit: invoice.total,
+            credit: 0,
+            balance: runningBalance
+        });
+
+        // Add the payment as a credit if it exists
+        if (invoice.paidAmount > 0) {
+            runningBalance -= invoice.paidAmount;
+            transactions.push({
+                date: invoice.invoiceDate, // Assuming payment date is same as invoice date for simplicity
+                transaction: `Payment for #${invoice.invoiceNumber}`,
+                debit: 0,
+                credit: invoice.paidAmount,
+                balance: runningBalance
+            });
         }
-        return {...inv, status};
     });
 
-    setCustomerInvoices(updatedInvoices);
+    setStatementTransactions(transactions);
     setLoadingStatement(false);
   };
   
   const totalBalanceDue = useMemo(() => {
-    return customerInvoices.reduce((acc, inv) => acc + (inv.balanceDue || 0), 0);
-  }, [customerInvoices]);
+    const lastTransaction = statementTransactions[statementTransactions.length - 1];
+    return lastTransaction ? lastTransaction.balance : 0;
+  }, [statementTransactions]);
 
   const handleDownloadCsv = () => {
-    if (customerInvoices.length === 0 || !selectedCustomer) return;
+    if (statementTransactions.length === 0 || !selectedCustomer) return;
 
-    const data = customerInvoices.map(inv => ({
-      "Invoice #": inv.invoiceNumber,
-      "Invoice Date": inv.invoiceDate,
-      "Due Date": inv.dueDate,
-      "Total": inv.total.toFixed(2),
-      "Paid Amount": inv.paidAmount.toFixed(2),
-      "Balance Due": (inv.balanceDue || 0).toFixed(2),
-      "Status": inv.status
+    const data = statementTransactions.map(t => ({
+      "Date": t.date,
+      "Transaction": t.transaction,
+      "Debit": t.debit.toFixed(2),
+      "Credit": t.credit.toFixed(2),
+      "Balance": t.balance.toFixed(2),
     }));
 
     const csv = Papa.unparse(data);
@@ -140,7 +159,7 @@ export default function StatementsPage() {
   };
 
   const handleDownloadPdf = () => {
-    if (customerInvoices.length === 0 || !selectedCustomer) return;
+    if (statementTransactions.length === 0 || !selectedCustomer) return;
     const doc = new jsPDF() as jsPDFWithAutoTable;
     
     doc.setFontSize(18);
@@ -149,18 +168,16 @@ export default function StatementsPage() {
     doc.setFontSize(11);
     doc.text(`Date: ${new Date().toLocaleDateString()}`, 14, 30);
     
-    const tableColumn = ["Invoice #", "Invoice Date", "Due Date", "Total", "Paid", "Balance Due", "Status"];
+    const tableColumn = ["Date", "Transaction", "Debit", "Credit", "Balance"];
     const tableRows: any[] = [];
     
-    customerInvoices.forEach(inv => {
+    statementTransactions.forEach(t => {
       const row = [
-        inv.invoiceNumber,
-        inv.invoiceDate,
-        inv.dueDate,
-        `GHS ${inv.total.toFixed(2)}`,
-        `GHS ${inv.paidAmount.toFixed(2)}`,
-        `GHS ${(inv.balanceDue || 0).toFixed(2)}`,
-        inv.status
+        t.date,
+        t.transaction,
+        t.debit > 0 ? `GHS ${t.debit.toFixed(2)}` : '',
+        t.credit > 0 ? `GHS ${t.credit.toFixed(2)}` : '',
+        `GHS ${t.balance.toFixed(2)}`
       ];
       tableRows.push(row);
     });
@@ -168,7 +185,12 @@ export default function StatementsPage() {
     doc.autoTable({
         head: [tableColumn],
         body: tableRows,
-        startY: 40
+        startY: 40,
+        didParseCell: function (data) {
+            if (data.column.dataKey === 2 || data.column.dataKey === 3 || data.column.dataKey === 4) {
+                 data.cell.styles.halign = 'right';
+            }
+        }
     });
 
     const finalY = (doc as any).autoTable.previous.finalY;
@@ -206,10 +228,10 @@ export default function StatementsPage() {
                 />
               </div>
               <div className="flex gap-2">
-                 <Button onClick={handleDownloadCsv} disabled={customerInvoices.length === 0}>
+                 <Button onClick={handleDownloadCsv} disabled={statementTransactions.length === 0}>
                     <File className="mr-2 h-4 w-4" /> Export CSV
                  </Button>
-                 <Button onClick={handleDownloadPdf} disabled={customerInvoices.length === 0}>
+                 <Button onClick={handleDownloadPdf} disabled={statementTransactions.length === 0}>
                     <FileText className="mr-2 h-4 w-4" /> Export PDF
                  </Button>
               </div>
@@ -228,45 +250,34 @@ export default function StatementsPage() {
               <div className="flex justify-center items-center h-40">
                  <Loader2 className="h-12 w-12 animate-spin text-primary" />
               </div>
-            ) : customerInvoices.length > 0 ? (
+            ) : statementTransactions.length > 0 ? (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Invoice #</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead>Due Date</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead className="text-right">Paid</TableHead>
-                    <TableHead className="text-right">Balance Due</TableHead>
+                    <TableHead>Transaction</TableHead>
+                    <TableHead className="text-right">Debit</TableHead>
+                    <TableHead className="text-right">Credit</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {customerInvoices.map((invoice) => (
-                    <TableRow key={invoice.id}>
-                      <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
-                      <TableCell>{invoice.invoiceDate}</TableCell>
-                      <TableCell>{invoice.dueDate}</TableCell>
-                      <TableCell>
-                         <Badge variant={
-                            invoice.status === 'Paid' ? 'secondary' : 
-                            invoice.status === 'Overdue' ? 'destructive' : 'default'
-                        } className={cn(invoice.status === 'Unpaid' && 'bg-amber-500 text-white')}>
-                            {invoice.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">GHS {invoice.total.toFixed(2)}</TableCell>
-                      <TableCell className="text-right">GHS {invoice.paidAmount.toFixed(2)}</TableCell>
-                      <TableCell className="text-right font-bold">GHS {(invoice.balanceDue || 0).toFixed(2)}</TableCell>
+                  {statementTransactions.map((transaction, index) => (
+                    <TableRow key={index}>
+                      <TableCell>{transaction.date}</TableCell>
+                      <TableCell className="font-medium">{transaction.transaction}</TableCell>
+                      <TableCell className="text-right">{transaction.debit > 0 ? `GHS ${transaction.debit.toFixed(2)}` : '-'}</TableCell>
+                      <TableCell className="text-right text-green-600">{transaction.credit > 0 ? `GHS ${transaction.credit.toFixed(2)}` : '-'}</TableCell>
+                      <TableCell className="text-right font-bold">GHS {transaction.balance.toFixed(2)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             ) : (
-              <p className="text-center py-8 text-muted-foreground">No invoices found for this customer.</p>
+              <p className="text-center py-8 text-muted-foreground">No transactions found for this customer.</p>
             )}
           </CardContent>
-           {customerInvoices.length > 0 && (
+           {statementTransactions.length > 0 && (
             <CardFooter className="flex justify-end">
                 <div className="text-right">
                     <p className="text-muted-foreground">Total Outstanding Balance</p>
@@ -286,4 +297,5 @@ export default function StatementsPage() {
 
     </div>
   );
-}
+
+    

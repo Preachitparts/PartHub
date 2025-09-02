@@ -17,7 +17,6 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription,
   CardFooter,
 } from "@/components/ui/card";
 import {
@@ -30,7 +29,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -58,9 +56,7 @@ const invoiceItemSchema = z.object({
   partNumber: z.string(),
   quantity: z.preprocess((a) => parseInt(z.string().parse(a || "0"), 10), z.number().int().min(1, "Quantity must be at least 1.")),
   unitPrice: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number()),
-  tax: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number()),
-  exFactPrice: z.number(),
-  total: z.number(), // The price after tax (exFactPrice * quantity)
+  total: z.number(),
 });
 
 const invoiceSchema = z.object({
@@ -69,8 +65,6 @@ const invoiceSchema = z.object({
   invoiceDate: z.string(),
   dueDate: z.string().min(1, "Due date is required."),
   items: z.array(invoiceItemSchema).min(1, "Please add at least one item."),
-  subtotal: z.number(),
-  tax: z.number(),
   total: z.number(),
   paidAmount: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number().min(0, "Paid amount cannot be negative.")),
   balanceDue: z.number(),
@@ -109,8 +103,6 @@ export default function NewInvoicePage() {
       dueDate: futureDate.toISOString().split("T")[0],
       customerId: "",
       items: [],
-      subtotal: 0,
-      tax: 0,
       total: 0,
       paidAmount: 0,
       balanceDue: 0,
@@ -162,25 +154,17 @@ export default function NewInvoicePage() {
   const watchItems = invoiceForm.watch("items");
   const watchPaidAmount = invoiceForm.watch("paidAmount");
 
-  const { subtotal, taxAmount, total, balanceDue } = useMemo(() => {
-    const subtotal = watchItems.reduce(
+  const { total, balanceDue } = useMemo(() => {
+    const total = watchItems.reduce(
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
     );
-    const taxAmount = watchItems.reduce(
-      (acc, item) => acc + (item.tax || 0) * (item.quantity || 1),
-      0
-    );
-    const total = subtotal + taxAmount;
-    const balanceDue = subtotal - (watchPaidAmount || 0);
+    const balanceDue = total - (watchPaidAmount || 0);
     
-    // Set form values for submission
-    invoiceForm.setValue("subtotal", subtotal);
-    invoiceForm.setValue("tax", taxAmount);
     invoiceForm.setValue("total", total);
     invoiceForm.setValue("balanceDue", balanceDue);
     
-    return { subtotal, taxAmount, total, balanceDue };
+    return { total, balanceDue };
   }, [watchItems, watchPaidAmount, invoiceForm]);
 
   const handlePartChange = (index: number, partId: string) => {
@@ -188,9 +172,7 @@ export default function NewInvoicePage() {
     if (selectedPart) {
       const quantity = 1;
       const unitPrice = selectedPart.price;
-      const tax = selectedPart.tax;
-      const exFactPrice = selectedPart.exFactPrice;
-      const total = exFactPrice * quantity;
+      const total = unitPrice * quantity;
 
       update(index, {
         partId: selectedPart.id,
@@ -198,14 +180,12 @@ export default function NewInvoicePage() {
         partNumber: selectedPart.partNumber,
         quantity: quantity,
         unitPrice,
-        tax,
-        exFactPrice,
         total
       });
     }
   };
 
-  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice' | 'tax', value: number) => {
+  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice', value: number) => {
     const item = invoiceForm.getValues(`items.${index}`);
     if (!item) return;
 
@@ -224,18 +204,16 @@ export default function NewInvoicePage() {
         if(value < 1) currentItem.quantity = 1;
     }
 
-    const exFactPrice = (currentItem.unitPrice || 0) + (currentItem.tax || 0);
-    const total = exFactPrice * (currentItem.quantity || 1);
+    const total = (currentItem.unitPrice || 0) * (currentItem.quantity || 1);
     
     update(index, {
       ...currentItem,
-      exFactPrice,
       total,
     });
   };
 
   const addNewItem = () => {
-    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, exFactPrice: 0, partName: '', partNumber: '' });
+    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, partName: '', partNumber: '' });
   };
 
   async function onInvoiceSubmit(data: InvoiceFormValues) {
@@ -278,12 +256,9 @@ export default function NewInvoicePage() {
                 status: status,
                 items: data.items.map(i => ({
                     partId: i.partId, partName: i.partName, partNumber: i.partNumber,
-                    quantity: i.quantity, unitPrice: i.unitPrice, tax: i.tax,
-                    exFactPrice: (i.unitPrice || 0) + (i.tax || 0),
-                    total: ((i.unitPrice || 0) + (i.tax || 0)) * (i.quantity || 1),
+                    quantity: i.quantity, unitPrice: i.unitPrice,
+                    total: (i.unitPrice || 0) * (i.quantity || 1),
                 })),
-                subtotal: data.subtotal,
-                tax: data.tax,
                 total: data.total,
                 paidAmount: data.paidAmount,
                 balanceDue: data.balanceDue,
@@ -323,7 +298,6 @@ export default function NewInvoicePage() {
         toast({ title: "Customer Created", description: `Successfully created customer: ${data.name}.` });
         await logActivity(`Created new customer: ${data.name}`);
         
-        // Refresh customer list and select the new one
         await fetchInitialData();
         invoiceForm.setValue('customerId', docRef.id);
         
@@ -425,6 +399,7 @@ export default function NewInvoicePage() {
                                     placeholder="Select a customer..."
                                     searchPlaceholder="Search customers..."
                                     emptyPlaceholder="No customers found."
+                                    onOpenAutoFocus={(e) => e.preventDefault()}
                                 />
                                 <Button type="button" variant="outline" size="icon" onClick={() => setIsCustomerFormOpen(true)}>
                                     <UserPlus className="h-4 w-4" />
@@ -460,7 +435,6 @@ export default function NewInvoicePage() {
                       <TableHead className="w-[35%]">Product</TableHead>
                       <TableHead>Qty</TableHead>
                       <TableHead>Unit Price</TableHead>
-                      <TableHead>Tax</TableHead>
                       <TableHead className="text-right">Total</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
@@ -485,6 +459,7 @@ export default function NewInvoicePage() {
                                           placeholder="Select a part..."
                                           searchPlaceholder="Search by name or part number..."
                                           emptyPlaceholder="No parts found."
+                                          onOpenAutoFocus={(e) => e.preventDefault()}
                                       />
                                   </FormControl>
                                   <FormMessage />
@@ -507,15 +482,6 @@ export default function NewInvoicePage() {
                             step="0.01"
                             {...invoiceForm.register(`items.${index}.unitPrice`)}
                             onChange={(e) => handleItemChange(index, 'unitPrice', parseFloat(e.target.value))}
-                            className="w-24"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            {...invoiceForm.register(`items.${index}.tax`)}
-                            onChange={(e) => handleItemChange(index, 'tax', parseFloat(e.target.value))}
                             className="w-24"
                           />
                         </TableCell>
@@ -546,14 +512,6 @@ export default function NewInvoicePage() {
             </CardContent>
             <CardFooter className="flex justify-end">
               <div className="w-full max-w-sm space-y-2">
-                  <div className="flex justify-between">
-                      <span>Subtotal</span>
-                      <span>GHS {subtotal.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                      <span>Tax</span>
-                      <span>GHS {taxAmount.toFixed(2)}</span>
-                  </div>
                   <div className="flex justify-between font-bold text-lg">
                       <span>Total</span>
                       <span>GHS {total.toFixed(2)}</span>

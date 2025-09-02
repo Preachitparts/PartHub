@@ -53,8 +53,6 @@ const invoiceItemSchema = z.object({
   partNumber: z.string(),
   quantity: z.preprocess((a) => parseInt(z.string().parse(a || "0"), 10), z.number().int().min(1, "Quantity must be at least 1.")),
   unitPrice: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number()),
-  tax: z.preprocess((a) => parseFloat(z.string().parse(a || "0")), z.number()),
-  exFactPrice: z.number(),
   total: z.number(),
 });
 
@@ -84,6 +82,9 @@ export default function EditInvoicePage() {
 
   const invoiceForm = useForm<InvoiceFormValues>({
     resolver: zodResolver(invoiceSchema),
+    defaultValues: {
+      paidAmount: 0,
+    }
   });
 
   const { fields, append, remove, update } = useFieldArray({
@@ -116,7 +117,10 @@ export default function EditInvoicePage() {
                     invoiceDate: invoiceData.invoiceDate,
                     dueDate: invoiceData.dueDate,
                     paidAmount: invoiceData.paidAmount || 0,
-                    items: invoiceData.items.map(i => ({...i, total: i.total || ((i.unitPrice + i.tax) * i.quantity)}))
+                    items: invoiceData.items.map(i => ({
+                      ...i, 
+                      total: i.total || (i.unitPrice * i.quantity)
+                    }))
                 });
             } else {
                  toast({ variant: "destructive", title: "Not Found", description: "Invoice not found." });
@@ -132,27 +136,22 @@ export default function EditInvoicePage() {
 
   useEffect(() => {
     fetchInitialData();
-  }, [invoiceId, router]);
+  }, [invoiceId]);
 
   const watchItems = invoiceForm.watch("items");
   const watchPaidAmount = invoiceForm.watch("paidAmount");
 
-  const { subtotal, taxAmount, total, balanceDue } = useMemo(() => {
+  const { total, balanceDue } = useMemo(() => {
     const currentItems = invoiceForm.getValues("items") || [];
     const currentPaidAmount = invoiceForm.getValues("paidAmount") || 0;
 
-    const subtotal = currentItems.reduce(
+    const total = currentItems.reduce(
       (acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 1),
       0
     );
-    const taxAmount = currentItems.reduce(
-      (acc, item) => acc + (item.tax || 0) * (item.quantity || 1),
-      0
-    );
-    const total = subtotal + taxAmount;
-    const balanceDueValue = subtotal - currentPaidAmount;
+    const balanceDueValue = total - currentPaidAmount;
     
-    return { subtotal, taxAmount, total, balanceDue: balanceDueValue };
+    return { total, balanceDue: balanceDueValue };
   }, [watchItems, watchPaidAmount, invoiceForm]);
 
   const handlePartChange = (index: number, partId: string) => {
@@ -165,22 +164,16 @@ export default function EditInvoicePage() {
         partNumber: selectedPart.partNumber,
         quantity,
         unitPrice: selectedPart.price,
-        tax: selectedPart.tax,
-        exFactPrice: selectedPart.exFactPrice,
-        total: selectedPart.exFactPrice * quantity,
+        total: selectedPart.price * quantity,
       });
     }
   };
 
-  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice' | 'tax', value: number) => {
+  const handleItemChange = (index: number, field: 'quantity' | 'unitPrice', value: number) => {
     const item = invoiceForm.getValues(`items.${index}`);
     if (!item) return;
 
     let currentItem = { ...item, [field]: value };
-    
-    if(field === 'tax' && isNaN(value)) {
-        currentItem.tax = 0;
-    }
     
     if (field === 'quantity') {
         const selectedPart = parts.find((p) => p.id === item.partId);
@@ -195,14 +188,13 @@ export default function EditInvoicePage() {
         if (value < 1) currentItem.quantity = 1;
     }
 
-    const exFactPrice = (currentItem.unitPrice || 0) + (currentItem.tax || 0);
-    const total = exFactPrice * (currentItem.quantity || 1);
+    const total = (currentItem.unitPrice || 0) * (currentItem.quantity || 1);
     
-    update(index, { ...currentItem, exFactPrice, total });
+    update(index, { ...currentItem, total });
   };
 
   const addNewItem = () => {
-    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, tax: 0, exFactPrice: 0, partName: '', partNumber: '' });
+    append({ partId: "", quantity: 1, unitPrice: 0, total: 0, partName: '', partNumber: '' });
   };
   
   async function onSubmit(data: InvoiceFormValues) {
@@ -219,20 +211,22 @@ export default function EditInvoicePage() {
         setIsSaving(false);
         return;
     }
-
-    const newSubtotal = data.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    const newTax = data.items.reduce((acc, item) => acc + item.tax * item.quantity, 0);
-    const newTotal = newSubtotal + newTax;
-    const newBalanceDue = newSubtotal - data.paidAmount;
+    
+    const formData = invoiceForm.getValues();
+    const newTotal = formData.items.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+    const newBalanceDue = newTotal - formData.paidAmount;
     const newStatus = newBalanceDue <= 0 ? 'Paid' : 'Unpaid';
 
     const finalInvoiceData: Omit<Invoice, "id" | "createdAt"> = {
-        ...data,
+        invoiceNumber: formData.invoiceNumber,
+        customerId: formData.customerId,
+        invoiceDate: formData.invoiceDate,
+        dueDate: formData.dueDate,
+        paidAmount: formData.paidAmount,
+        items: formData.items,
         customerName: selectedCustomer.name || '',
         customerAddress: selectedCustomer.address || '',
         customerPhone: selectedCustomer.phone || '',
-        subtotal: newSubtotal,
-        tax: newTax,
         total: newTotal,
         balanceDue: newBalanceDue,
         status: newStatus,
@@ -243,25 +237,21 @@ export default function EditInvoicePage() {
         await runTransaction(db, async (transaction) => {
             const invoiceRef = doc(db, "invoices", invoiceId);
             
-            // Calculate stock differences
             const stockChanges = new Map<string, number>();
 
-            // Add back original quantities
             originalInvoice.items.forEach(item => {
                 stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) + item.quantity);
             });
 
-            // Subtract new quantities
             finalInvoiceData.items.forEach(item => {
                 stockChanges.set(item.partId, (stockChanges.get(item.partId) || 0) - item.quantity);
             });
             
-            // Validate stock levels before writing
             const partRefsToUpdate = Array.from(stockChanges.keys()).filter(partId => stockChanges.get(partId) !== 0);
             
             for (const partId of partRefsToUpdate) {
                 const change = stockChanges.get(partId)!;
-                if (change < 0) { // If we are decrementing stock
+                if (change < 0) {
                     const partRef = doc(db, "parts", partId);
                     const partDoc = await transaction.get(partRef);
                     if (!partDoc.exists()) throw new Error(`Part with ID ${partId} not found.`);
@@ -272,7 +262,6 @@ export default function EditInvoicePage() {
                 }
             }
             
-            // Apply all changes
             for (const partId of partRefsToUpdate) {
                const change = stockChanges.get(partId)!;
                const partRef = doc(db, "parts", partId);
@@ -344,6 +333,7 @@ export default function EditInvoicePage() {
                                     placeholder="Select a customer..."
                                     searchPlaceholder="Search customers..."
                                     emptyPlaceholder="No customers found."
+                                    onOpenAutoFocus={(e) => e.preventDefault()}
                                 />
                             </div>
                         </FormControl>
@@ -376,7 +366,6 @@ export default function EditInvoicePage() {
                       <TableHead className="w-[35%]">Product</TableHead>
                       <TableHead>Qty</TableHead>
                       <TableHead>Unit Price</TableHead>
-                      <TableHead>Tax</TableHead>
                       <TableHead className="text-right">Total</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
@@ -403,6 +392,7 @@ export default function EditInvoicePage() {
                                           placeholder="Select a part..."
                                           searchPlaceholder="Search by name or part number..."
                                           emptyPlaceholder="No parts found."
+                                          onOpenAutoFocus={(e) => e.preventDefault()}
                                       />
                                   </FormControl>
                                   <FormMessage />
@@ -424,15 +414,6 @@ export default function EditInvoicePage() {
                             step="0.01"
                             {...invoiceForm.register(`items.${index}.unitPrice`)}
                             onChange={(e) => handleItemChange(index, 'unitPrice', parseFloat(e.target.value) || 0)}
-                            className="w-24"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            {...invoiceForm.register(`items.${index}.tax`)}
-                            onChange={(e) => handleItemChange(index, 'tax', parseFloat(e.target.value) || 0)}
                             className="w-24"
                           />
                         </TableCell>
@@ -463,14 +444,6 @@ export default function EditInvoicePage() {
             </CardContent>
             <CardFooter className="flex-col items-end space-y-4">
               <div className="w-full max-w-sm space-y-2">
-                  <div className="flex justify-between">
-                      <span>Subtotal</span>
-                      <span>GHS {subtotal.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                      <span>Tax</span>
-                      <span>GHS {taxAmount.toFixed(2)}</span>
-                  </div>
                   <div className="flex justify-between font-bold text-lg">
                       <span>Total</span>
                       <span>GHS {total.toFixed(2)}</span>

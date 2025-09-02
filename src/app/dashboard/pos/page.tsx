@@ -46,7 +46,6 @@ import * as z from "zod";
 interface CartItem extends Part {
   quantity: number;
   salePrice: number;
-  saleTax: number;
 }
 
 const customerSchema = z.object({
@@ -146,7 +145,7 @@ export default function POSPage() {
         }
       }
       if (part.stock > 0) {
-        return [...currentCart, { ...part, quantity: 1, salePrice: part.price, saleTax: part.tax }];
+        return [...currentCart, { ...part, quantity: 1, salePrice: part.price }];
       } else {
          toast({
             variant: "destructive",
@@ -158,7 +157,7 @@ export default function POSPage() {
     });
   };
 
-  const updateCartItem = (partId: string, field: 'quantity' | 'salePrice' | 'saleTax', value: number) => {
+  const updateCartItem = (partId: string, field: 'quantity' | 'salePrice', value: number) => {
     setCart((currentCart) => {
       const partInCatalog = parts.find(p => p.id === partId);
       if (!partInCatalog) return currentCart;
@@ -191,16 +190,13 @@ export default function POSPage() {
     setCart((currentCart) => currentCart.filter((item) => item.id !== partId));
   };
   
-  const {subtotal, taxAmount, total, balanceDue} = useMemo(() => {
-    const subtotal = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
-    const taxAmount = cart.reduce((acc, item) => acc + item.saleTax * item.quantity, 0);
-    const total = subtotal + taxAmount;
-    const balanceDue = subtotal - paidAmount;
-    return { subtotal, taxAmount, total, balanceDue };
+  const {total, balanceDue} = useMemo(() => {
+    const total = cart.reduce((acc, item) => acc + item.salePrice * item.quantity, 0);
+    const balanceDue = total - paidAmount;
+    return { total, balanceDue };
   }, [cart, paidAmount]);
 
   useEffect(() => {
-    // When cart total changes, update the paid amount to be the full total by default
     setPaidAmount(total);
   }, [total]);
 
@@ -263,7 +259,7 @@ export default function POSPage() {
             }
 
             const invoiceRef = doc(db, "invoices", invoiceNumber);
-            const finalBalanceDue = subtotal - paidAmount;
+            const finalBalanceDue = total - paidAmount;
             const status = finalBalanceDue <= 0 ? 'Paid' : 'Unpaid';
             const invoiceToSave: Omit<Invoice, 'id'> = {
                 invoiceNumber: invoiceNumber,
@@ -276,11 +272,9 @@ export default function POSPage() {
                 status,
                 items: cart.map(i => ({
                     partId: i.id, partName: i.name, partNumber: i.partNumber,
-                    quantity: i.quantity, unitPrice: i.salePrice, tax: i.saleTax,
-                    exFactPrice: i.salePrice + i.saleTax, total: (i.salePrice + i.saleTax) * i.quantity,
+                    quantity: i.quantity, unitPrice: i.salePrice,
+                    total: i.salePrice * i.quantity,
                 })),
-                subtotal: subtotal,
-                tax: taxAmount,
                 total: total,
                 paidAmount: paidAmount,
                 balanceDue: finalBalanceDue,
@@ -393,7 +387,7 @@ export default function POSPage() {
                            </div>
                         </TableCell>
                         <TableCell>{part.stock}</TableCell>
-                        <TableCell className="text-right">GHS {part.exFactPrice.toFixed(2)}</TableCell>
+                        <TableCell className="text-right">GHS {part.price.toFixed(2)}</TableCell>
                         <TableCell className="text-right">
                           <Button size="sm" onClick={() => addToCart(part)} disabled={part.stock === 0}>
                             <PlusCircle className="h-4 w-4" />
@@ -429,6 +423,7 @@ export default function POSPage() {
                         placeholder="Select a customer..."
                         searchPlaceholder="Search customers..."
                         emptyPlaceholder="No customers found."
+                        onOpenAutoFocus={(e) => e.preventDefault()}
                     />
                     <Button type="button" variant="outline" size="icon" onClick={() => setIsCustomerFormOpen(true)}>
                         <UserPlus className="h-4 w-4" />
@@ -449,14 +444,13 @@ export default function POSPage() {
                     <TableHead>Item</TableHead>
                     <TableHead>Qty</TableHead>
                     <TableHead>Price</TableHead>
-                    <TableHead>Tax</TableHead>
                     <TableHead className="w-[40px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {cart.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground py-4">Cart is empty</TableCell>
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-4">Cart is empty</TableCell>
                     </TableRow>
                   ) : (
                     cart.map((item) => (
@@ -464,7 +458,6 @@ export default function POSPage() {
                         <TableCell className="font-medium line-clamp-2 pr-1">{item.name}</TableCell>
                         <TableCell><Input type="number" className="w-16" value={item.quantity} onChange={(e) => updateCartItem(item.id, 'quantity', parseInt(e.target.value))}/></TableCell>
                          <TableCell><Input type="number" step="0.01" className="w-20" value={item.salePrice} onChange={(e) => updateCartItem(item.id, 'salePrice', parseFloat(e.target.value))}/></TableCell>
-                         <TableCell><Input type="number" step="0.01" className="w-20" value={item.saleTax} onChange={(e) => updateCartItem(item.id, 'saleTax', parseFloat(e.target.value))}/></TableCell>
                         <TableCell className="text-right">
                           <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive h-8 w-8" onClick={() => removeFromCart(item.id)}><Trash2 className="h-4 w-4" /></Button>
                         </TableCell>
@@ -475,8 +468,6 @@ export default function POSPage() {
               </Table>
             </div>
             <div className="mt-2 space-y-2 text-sm">
-                <div className="flex justify-between"><span>Subtotal</span><span>GHS {subtotal.toFixed(2)}</span></div>
-                <div className="flex justify-between"><span>Tax</span><span>GHS {taxAmount.toFixed(2)}</span></div>
                 <div className="flex justify-between font-bold text-base"><span>Total</span><span>GHS {total.toFixed(2)}</span></div>
                 <div className="flex justify-between items-center">
                     <Label htmlFor="paidAmount">Amount Paid</Label>

@@ -37,14 +37,10 @@ export function PartsGrid({ parts }: PartsGridProps) {
           </CardHeader>
           <CardContent className="flex-grow">
             <p className="text-sm text-muted-foreground line-clamp-2">{part.description}</p>
-            <div className="text-xs text-muted-foreground mt-2">
-                <p>Base: GH₵{part.price.toFixed(2)}</p>
-                <p>Tax: GH₵{part.tax.toFixed(2)} {part.taxable ? "" : "(Tax Exempt)"}</p>
-            </div>
           </CardContent>
           <CardFooter className="flex justify-between items-center">
             <span className="text-xl font-bold text-primary">
-              GH₵{part.exFactPrice.toFixed(2)}
+              GH₵{part.price.toFixed(2)}
             </span>
             <Badge variant={part.stock > 0 ? "secondary" : "destructive"}>
               {part.stock > 0 ? `${part.stock} in stock` : "Out of stock"}

@@ -27,7 +27,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogClose,
 } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
@@ -41,9 +40,6 @@ import type { Part, TaxInvoice, TaxInvoiceItem } from "@/types";
 import Papa from "papaparse";
 import { Combobox, ComboboxOption } from "@/components/ui/combobox";
 import { logActivity } from "@/lib/activity-log";
-
-
-const TAX_RATE = 0.219; // 21.9%
 
 const taxInvoiceItemSchema = z.object({
     partId: z.string().optional(),
@@ -94,7 +90,7 @@ export default function InventoryPage() {
   const { fields, append, remove, update } = useFieldArray({
     control: form.control,
     name: "items",
-    keyName: "key" // Use a different key name than "id"
+    keyName: "key"
   });
 
   const watchItems = form.watch("items");
@@ -227,17 +223,14 @@ export default function InventoryPage() {
     const invoiceItems: TaxInvoiceItem[] = [];
     
     for (const item of data.items) {
-        let finalItem: TaxInvoiceItem = { ...item, isNew: false }; // Always set isNew to false for the stored item
+        let finalItem: TaxInvoiceItem = { ...item, isNew: false };
 
         if (item.isNew && !item.partId) {
             const newPartRef = doc(collection(db, 'parts'));
-            const tax = item.price * TAX_RATE;
-            const exFactPrice = item.price + tax;
             const newPartData: Omit<Part, 'id'> = {
                 name: item.name, partNumber: item.partNumber, partCode: item.partNumber, 
-                description: '', price: item.price, stock: item.quantity, taxable: true,
-                tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
-                pricingType: 'exclusive'
+                description: '', price: item.price, stock: item.quantity,
+                brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
             };
             batch.set(newPartRef, newPartData);
             
@@ -265,25 +258,19 @@ export default function InventoryPage() {
   async function updateExistingInvoice(data: TaxInvoiceFormValues) {
     if (!data.id) throw new Error("Invoice ID is missing for update.");
     const invoiceRef = doc(db, "taxInvoices", data.id);
-    // This function now only updates invoice-level details, not items.
-    // Item updates are handled by handleSaveItem.
-    // But we should also allow saving all items at once.
     
     const originalInvoiceDoc = await getDoc(invoiceRef);
     if (!originalInvoiceDoc.exists()) throw new Error("Original invoice not found.");
     const originalInvoice = originalInvoiceDoc.data() as TaxInvoice;
     
     await runTransaction(db, async (transaction) => {
-        // Handle changes in invoice-level details
         transaction.update(invoiceRef, {
             supplierName: data.supplierName,
             supplierInvoiceNumber: data.invoiceNumber || '',
         });
 
-        // Handle item changes
         const stockAdjustments = new Map<string, number>();
 
-        // Revert original quantities
         originalInvoice.items.forEach(item => {
             if (item.partId) {
                 stockAdjustments.set(item.partId, (stockAdjustments.get(item.partId) || 0) - item.quantity);
@@ -294,16 +281,12 @@ export default function InventoryPage() {
         for (const item of data.items) {
             let finalItem = { ...item };
             if (item.isNew && !item.partId) {
-                // Create new part
                 const newPartRef = doc(collection(db, 'parts'));
                 const newPartId = newPartRef.id;
-                const tax = item.price * TAX_RATE;
-                const exFactPrice = item.price + tax;
                 const newPartData: Omit<Part, 'id'> = {
                     name: item.name, partNumber: item.partNumber, partCode: item.partNumber,
-                    description: '', price: item.price, stock: 0, taxable: true, // stock starts at 0, will be incremented
-                    tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
-                    pricingType: 'exclusive'
+                    description: '', price: item.price, stock: 0, 
+                    brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
                 };
                 transaction.set(newPartRef, newPartData);
                 finalItem.partId = newPartId;
@@ -316,7 +299,6 @@ export default function InventoryPage() {
             newItems.push(finalItem);
         }
 
-        // Apply stock adjustments
         for (const [partId, adjustment] of stockAdjustments.entries()) {
             const partRef = doc(db, "parts", partId);
             transaction.update(partRef, { stock: increment(adjustment) });
@@ -327,7 +309,7 @@ export default function InventoryPage() {
         transaction.update(invoiceRef, {
             items: newItems,
             totalAmount: newTotalAmount,
-            date: Timestamp.now() // Update date to reflect changes
+            date: Timestamp.now()
         });
     });
 
@@ -345,7 +327,6 @@ export default function InventoryPage() {
             for (const item of invoiceToDelete.items) {
                 if (item.partId) {
                     const partRef = doc(db, "parts", item.partId);
-                    // Decrement stock since we are deleting an incoming stock record
                     transaction.update(partRef, { stock: increment(-item.quantity) });
                 }
             }
@@ -356,7 +337,7 @@ export default function InventoryPage() {
         toast({ title: "Invoice Deleted", description: `Invoice ${invoiceToDelete.invoiceId} has been deleted.` });
         await logActivity(`Deleted tax invoice ${invoiceToDelete.invoiceId}.`);
         setInvoiceToDelete(null);
-        fetchData(); // Refresh data
+        fetchData();
     } catch (error: any) {
         console.error("Failed to delete invoice:", error);
         toast({ variant: "destructive", title: "Deletion Failed", description: error.message });
@@ -388,25 +369,22 @@ export default function InventoryPage() {
             let stockAdjustment = 0;
             let finalItemData = { ...itemToSave };
 
-            if (itemToSave.isNew && !itemToSave.partId) { // Creating a new part
+            if (itemToSave.isNew && !itemToSave.partId) { 
                 const newPartRef = doc(collection(db, 'parts'));
                 const newPartId = newPartRef.id;
 
-                const tax = itemToSave.price * TAX_RATE;
-                const exFactPrice = itemToSave.price + tax;
                 const newPartData: Omit<Part, 'id'> = {
                     name: itemToSave.name, partNumber: itemToSave.partNumber, partCode: itemToSave.partNumber,
-                    description: '', price: itemToSave.price, stock: itemToSave.quantity, taxable: true,
-                    tax, exFactPrice, brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
-                    pricingType: 'exclusive'
+                    description: '', price: itemToSave.price, stock: itemToSave.quantity,
+                    brand: '', category: '', equipmentModel: '', imageUrl: "https://placehold.co/600x400",
                 };
                 transaction.set(newPartRef, newPartData);
                 
                 finalItemData.partId = newPartId;
-                finalItemData.isNew = false; // It's no longer new
-                stockAdjustment = itemToSave.quantity; // Stock is just the new quantity
+                finalItemData.isNew = false;
+                stockAdjustment = itemToSave.quantity;
                 await logActivity(`Created new part '${itemToSave.name}' via tax invoice edit.`);
-            } else if (itemToSave.partId) { // Updating an existing part
+            } else if (itemToSave.partId) {
                  const partRef = doc(db, "parts", itemToSave.partId);
                  const originalQty = originalItem ? originalItem.quantity : 0;
                  stockAdjustment = itemToSave.quantity - originalQty;
@@ -415,12 +393,11 @@ export default function InventoryPage() {
             }
 
             let updatedItems = [...originalItems];
-            if (originalItem) { // If item existed, update it
+            if (originalItem) {
                 updatedItems = originalItems.map(item => item.partId === finalItemData.partId ? finalItemData : item);
-            } else if (finalItemData.partId) { // If item is new, add it
+            } else if (finalItemData.partId) {
                 updatedItems.push(finalItemData);
             }
-
 
             const newTotalAmount = updatedItems.reduce((total, item) => total + (item.price * item.quantity), 0);
 
@@ -430,14 +407,13 @@ export default function InventoryPage() {
                 date: Timestamp.now(),
             });
 
-            // Update the form state silently to reflect the change from new to existing part
             if(itemToSave.isNew && finalItemData.partId) {
                 update(index, finalItemData);
             }
         });
 
         toast({ title: "Item Saved", description: `${itemToSave.name} has been updated.` });
-        await fetchData(); // Refresh all data to ensure consistency
+        await fetchData();
 
     } catch (error: any) {
         console.error("Failed to save item:", error);
@@ -510,10 +486,6 @@ export default function InventoryPage() {
                 const partRef = doc(collection(db, 'parts'));
                 const partId = partRef.id;
 
-                const taxable = (row['Taxable'] || row['taxable'] || 'true').toLowerCase() === 'true';
-                const tax = taxable ? price * TAX_RATE : 0;
-                const exFactPrice = price + tax;
-
                 const newPartData: Omit<Part, 'id'> = {
                     name: name,
                     partNumber: partNumber,
@@ -521,14 +493,10 @@ export default function InventoryPage() {
                     description: row['Description'] || name,
                     price: price,
                     stock: quantity,
-                    taxable: taxable,
-                    tax: tax,
-                    exFactPrice: exFactPrice,
                     brand: row['Brand'] || row['brand'] || '',
                     category: row['Category'] || row['category'] || '',
                     equipmentModel: row['Equipment Model'] || row['EquipmentModel'] || row['equipmentModel'] || '',
                     imageUrl: row['Image URL'] || row['ImageURL'] || row['imageUrl'] || "https://placehold.co/600x400",
-                    pricingType: 'exclusive'
                 };
 
                 batch.set(partRef, newPartData);
@@ -668,6 +636,7 @@ export default function InventoryPage() {
                                                       placeholder="Select a part..."
                                                       searchPlaceholder="Search parts..."
                                                       emptyPlaceholder="No parts found."
+                                                      onOpenAutoFocus={(e) => e.preventDefault()}
                                                   />
                                               )}
                                           </TableCell>
@@ -835,8 +804,8 @@ export default function InventoryPage() {
                         </TableHeader>
                         <TableBody>
                             {selectedInvoice.items.map((item, index) => {
-                                const price = item.price || 0;
-                                const quantity = item.quantity || 0;
+                                const price = typeof item.price === 'number' ? item.price : 0;
+                                const quantity = typeof item.quantity === 'number' ? item.quantity : 0;
                                 return (
                                 <TableRow key={index}>
                                     <TableCell>{item.name}</TableCell>

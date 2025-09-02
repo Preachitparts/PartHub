@@ -22,42 +22,14 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-const TAX_RATE = 0.219; // 21.9%
-
-const mockParts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[] = [
-  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", partCode: "P001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://picsum.photos/600/400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000", taxable: true, pricingType: "exclusive" },
-  { name: "Engine Air Filter", partNumber: "EAF-002", partCode: "P002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://picsum.photos/600/400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300", taxable: true, pricingType: "exclusive" },
-  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", partCode: "P003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://picsum.photos/600/400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10", taxable: true, pricingType: "exclusive" },
-  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", partCode: "P004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://picsum.photos/600/400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900", taxable: true, pricingType: "exclusive" },
-  { name: "Turbocharger", partNumber: "TRB-CHR-005", partCode: "P005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://picsum.photos/600/400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5", taxable: false, pricingType: "exclusive" },
-  { name: "Fuel Injector", partNumber: "FUL-INJ-006", partCode: "P006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://picsum.photos/600/400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000", taxable: true, pricingType: "exclusive" },
+const mockParts: Omit<Part, 'id'>[] = [
+  { name: "Heavy-Duty Alternator", partNumber: "HD-ALT-001", partCode: "P001", description: "12V, 160A alternator for commercial trucks.", price: 299.99, stock: 15, imageUrl: "https://picsum.photos/600/400", brand: "PowerMax", category: "Electrical", equipmentModel: "TruckMaster 5000" },
+  { name: "Engine Air Filter", partNumber: "EAF-002", partCode: "P002", description: "High-performance air filter for diesel engines.", price: 45.50, stock: 48, imageUrl: "https://picsum.photos/600/400", brand: "CleanFlow", category: "Filters", equipmentModel: "EarthMover 300" },
+  { name: "Hydraulic Pump", partNumber: "HYD-PMP-003", partCode: "P003", description: "Gear pump for hydraulic systems, 25 GPM.", price: 850.00, stock: 8, imageUrl: "https://picsum.photos/600/400", brand: "HydroGear", category: "Hydraulics", equipmentModel: "Excavator X10" },
+  { name: "Brake Pad Set", partNumber: "BRK-PAD-004", partCode: "P004", description: "Ceramic brake pads for heavy equipment.", price: 120.75, stock: 32, imageUrl: "https://picsum.photos/600/400", brand: "StopWell", category: "Brakes", equipmentModel: "Loader Pro 900" },
+  { name: "Turbocharger", partNumber: "TRB-CHR-005", partCode: "P005", description: "High-efficiency turbocharger for increased horsepower.", price: 1250.00, stock: 5, imageUrl: "https://picsum.photos/600/400", brand: "BoostUp", category: "Engine", equipmentModel: "Dozer D5" },
+  { name: "Fuel Injector", partNumber: "FUL-INJ-006", partCode: "P006", description: "Common rail fuel injector for modern diesel engines.", price: 350.00, stock: 25, imageUrl: "https://picsum.photos/600/400", brand: "DieselPro", category: "Fuel System", equipmentModel: "TruckMaster 5000" },
 ];
-
-const generatePartsWithTax = (parts: Omit<Part, 'id' | 'tax' | 'exFactPrice'>[]): Omit<Part, 'id'>[] => {
-  return parts.map((part, index) => {
-    let basePrice = part.price;
-    let tax = 0;
-    let exFactPrice = part.price;
-
-    if (part.taxable) {
-        if (part.pricingType === 'inclusive') {
-            basePrice = part.price / (1 + TAX_RATE);
-            tax = part.price - basePrice;
-            exFactPrice = part.price;
-        } else { // exclusive
-            tax = part.price * TAX_RATE;
-            exFactPrice = part.price + tax;
-        }
-    }
-    
-    return {
-      ...part,
-      price: basePrice,
-      tax,
-      exFactPrice,
-    };
-  });
-};
 
 function LowStockItems({ parts }: { parts: Part[] }) {
     if (parts.length === 0) {
@@ -170,7 +142,7 @@ export default function DashboardPage() {
         return;
       }
       
-      const partsToSeed = generatePartsWithTax(mockParts);
+      const partsToSeed = mockParts;
 
       for (let i = 0; i < partsToSeed.length; i++) {
         const part = partsToSeed[i];
@@ -178,7 +150,7 @@ export default function DashboardPage() {
         await setDoc(doc(db, "parts", partId), part);
       }
 
-      await setDoc(doc(db, "internal", "seeding_flag"), { seeded: true, taxRate: TAX_RATE });
+      await setDoc(doc(db, "internal", "seeding_flag"), { seeded: true });
       
       toast({
         title: "Database Seeded",
@@ -279,5 +251,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-    

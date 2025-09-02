@@ -7,12 +7,8 @@ export interface Part {
   partNumber: string;
   partCode: string;
   description: string;
-  price: number; // This will be treated as the base price
-  previousPrice?: number; // To store the last price
-  pricingType: 'inclusive' | 'exclusive';
-  tax: number;
-  exFactPrice: number;
-  taxable: boolean;
+  price: number;
+  previousPrice?: number;
   stock: number;
   imageUrl: string;
   brand: string;
@@ -44,10 +40,8 @@ export interface InvoiceItem {
   partName: string;
   partNumber: string;
   quantity: number;
-  unitPrice: number; // Price before tax
-  tax: number;
-  exFactPrice: number; // Price after tax
-  total: number; // Total for this line (exFactPrice * quantity)
+  unitPrice: number;
+  total: number;
 }
 
 export interface Invoice {
@@ -64,8 +58,6 @@ export interface Invoice {
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   items: InvoiceItem[];
-  subtotal: number;
-  tax: number;
   total: number;
   paidAmount: number;
   balanceDue: number;

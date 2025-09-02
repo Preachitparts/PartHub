@@ -200,7 +200,7 @@ export default function InvoicesPage() {
         
 
         // Table
-        const tableColumn = ["Product Name", "Part Number", "Qty", "Unit Price", "Tax", "Total"];
+        const tableColumn = ["Product Name", "Part Number", "Qty", "Unit Price", "Total"];
         const tableRows: any[] = [];
 
         invoice.items.forEach(item => {
@@ -209,8 +209,7 @@ export default function InvoicesPage() {
                 item.partNumber,
                 item.quantity,
                 `GHS ${(item.unitPrice || 0).toFixed(2)}`,
-                `GHS ${(item.tax || 0).toFixed(2)}`,
-                `GHS ${((item.exFactPrice || 0) * (item.quantity || 0)).toFixed(2)}`
+                `GHS ${(item.total || 0).toFixed(2)}`
             ];
             tableRows.push(itemData);
         });
@@ -231,8 +230,7 @@ export default function InvoicesPage() {
         }
 
         doc.setFontSize(10);
-        doc.text(`Subtotal: GHS ${(invoice.subtotal || 0).toFixed(2)}`, 140, finalY + 10);
-        doc.text(`Tax: GHS ${(invoice.tax || 0).toFixed(2)}`, 140, finalY + 15);
+        doc.text(`Total: GHS ${(invoice.total || 0).toFixed(2)}`, 140, finalY + 15);
         doc.text(`Paid: GHS ${(invoice.paidAmount || 0).toFixed(2)}`, 140, finalY + 20);
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
@@ -455,7 +453,6 @@ export default function InvoicesPage() {
                                         <TableHead>Product Name</TableHead>
                                         <TableHead>Part Number</TableHead>
                                         <TableHead className="text-right">Unit Price</TableHead>
-                                        <TableHead className="text-right">Tax</TableHead>
                                         <TableHead className="text-right">Quantity</TableHead>
                                         <TableHead className="text-right">Total</TableHead>
                                     </TableRow>
@@ -466,9 +463,8 @@ export default function InvoicesPage() {
                                             <TableCell>{item.partName}</TableCell>
                                             <TableCell>{item.partNumber}</TableCell>
                                             <TableCell className="text-right">GHS {(item.unitPrice || 0).toFixed(2)}</TableCell>
-                                            <TableCell className="text-right">GHS {(item.tax || 0).toFixed(2)}</TableCell>
                                             <TableCell className="text-right">{item.quantity}</TableCell>
-                                            <TableCell className="text-right">GHS {((item.exFactPrice || 0) * item.quantity).toFixed(2)}</TableCell>
+                                            <TableCell className="text-right">GHS {((item.total || 0)).toFixed(2)}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
@@ -476,14 +472,6 @@ export default function InvoicesPage() {
                         </div>
                         <div className="flex justify-end mt-4">
                             <div className="w-full max-w-xs space-y-2">
-                                <div className="flex justify-between">
-                                    <span>Subtotal</span>
-                                    <span>GHS {(selectedInvoice.subtotal || 0).toFixed(2)}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span>Tax</span>
-                                    <span>GHS {(selectedInvoice.tax || 0).toFixed(2)}</span>
-                                 </div>
                                   <div className="flex justify-between">
                                     <span>Total Amount</span>
                                     <span>GHS {(selectedInvoice.total || 0).toFixed(2)}</span>
